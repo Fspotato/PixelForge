@@ -1,0 +1,49 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Virtual environments
+.venv/
+backend/.venv/
+
+# Django
+backend/staticfiles/
+backend/media/
+backend/db.sqlite3
+backend/logs/*
+!backend/logs/.gitkeep
+
+# Environment files
+*.env
+*.env.*
+!backend/env/.env.dev.example
+!backend/env/.env.stage.example
+!backend/env/.env.prod.example
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Celery
+celerybeat*
+
+# Frontend
+node_modules/
+frontend/dist/
+*.tsbuildinfo
+
+# Beads / Dolt files (added by bd init)
+.dolt/
+*.db
+.beads-credential-key

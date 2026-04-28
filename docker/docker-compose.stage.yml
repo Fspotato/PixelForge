@@ -1,0 +1,106 @@
+services:
+  web:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.stage
+    container_name: ai-service-framework-stage-web
+    env_file:
+      - ../backend/env/.env.stage
+    environment:
+      DJANGO_ENV: stage
+      PYTHONPATH: /app
+    command: >
+      sh -c "python manage.py migrate &&
+      gunicorn config.wsgi:application --bind 0.0.0.0:8000 --workers 3"
+    volumes:
+      - ../backend/logs:/app/logs
+      - ../scripts:/scripts:ro
+    ports:
+      - "8010:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/system/ping/').read()\""]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  celery-worker:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.stage
+    container_name: ai-service-framework-stage-celery-worker
+    env_file:
+      - ../backend/env/.env.stage
+    environment:
+      DJANGO_ENV: stage
+      PYTHONPATH: /app
+    command: celery -A config worker --loglevel=info
+    volumes:
+      - ../backend/logs:/app/logs
+      - ../scripts:/scripts:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  celery-beat:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.stage
+    container_name: ai-service-framework-stage-celery-beat
+    env_file:
+      - ../backend/env/.env.stage
+    environment:
+      DJANGO_ENV: stage
+      PYTHONPATH: /app
+    command: >
+      sh -c "celery -A config beat --loglevel=info"
+    volumes:
+      - ../backend/logs:/app/logs
+      - ../scripts:/scripts:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  postgres:
+    image: pgvector/pgvector:pg17
+    container_name: ai-service-framework-stage-postgres
+    hostname: stage-postgres
+    env_file:
+      - ../backend/env/.env.stage
+    ports:
+      - "5433:5432"
+    volumes:
+      - stage_postgres_data:/var/lib/postgresql/data
+      - ../scripts/init-pgvector.sql:/docker-entrypoint-initdb.d/init-pgvector.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:8-alpine
+    container_name: ai-service-framework-stage-redis
+    hostname: stage-redis
+    ports:
+      - "6380:6379"
+    volumes:
+      - stage_redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  stage_postgres_data:
+  stage_redis_data:

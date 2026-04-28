@@ -1,0 +1,159 @@
+services:
+  bootstrap:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.dev
+    container_name: ai-service-framework-dev-bootstrap
+    env_file:
+      - ../backend/env/.env.dev
+    environment:
+      DJANGO_ENV: dev
+      PYTHONPATH: /app
+    command: >
+      sh -c "uv sync --frozen &&
+      python -m config.dev_bootstrap"
+    volumes:
+      - ../backend:/app
+      - dev_venv:/app/.venv
+      - ../scripts:/scripts:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  web:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.dev
+    container_name: ai-service-framework-dev-web
+    env_file:
+      - ../backend/env/.env.dev
+    environment:
+      DJANGO_ENV: dev
+      PYTHONPATH: /app
+    command: >
+      sh -c "uv sync --frozen &&
+      python manage.py runserver 0.0.0.0:8001"
+    volumes:
+      - ../backend:/app
+      - dev_venv:/app/.venv
+      - ../scripts:/scripts:ro
+    ports:
+      - "8001:8001"
+    depends_on:
+      bootstrap:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/api/v1/system/ping/').read()\""]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  celery-worker:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.dev
+    container_name: ai-service-framework-dev-celery-worker
+    env_file:
+      - ../backend/env/.env.dev
+    environment:
+      DJANGO_ENV: dev
+      PYTHONPATH: /app
+    command: >
+      sh -c "uv sync --frozen &&
+      celery -A config worker --loglevel=info --uid=nobody --gid=nogroup"
+    volumes:
+      - ../backend:/app
+      - dev_venv:/app/.venv
+      - ../scripts:/scripts:ro
+    depends_on:
+      bootstrap:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  celery-beat:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.dev
+    container_name: ai-service-framework-dev-celery-beat
+    env_file:
+      - ../backend/env/.env.dev
+    environment:
+      DJANGO_ENV: dev
+      PYTHONPATH: /app
+    command: >
+      sh -c "uv sync --frozen &&
+      celery -A config beat --loglevel=info --uid=nobody --gid=nogroup"
+    volumes:
+      - ../backend:/app
+      - dev_venv:/app/.venv
+      - ../scripts:/scripts:ro
+    depends_on:
+      bootstrap:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  postgres:
+    image: pgvector/pgvector:pg17
+    container_name: ai-service-framework-dev-postgres
+    env_file:
+      - ../backend/env/.env.dev
+    ports:
+      - "5432:5432"
+    volumes:
+      - dev_postgres_data:/var/lib/postgresql/data
+      - ../scripts/init-pgvector.sql:/docker-entrypoint-initdb.d/init-pgvector.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:8-alpine
+    container_name: ai-service-framework-dev-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - dev_redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  frontend:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.frontend.dev
+    container_name: ai-service-framework-dev-frontend
+    environment:
+      API_PROXY_TARGET: http://web:8001
+    command: >
+      sh -c "npm install && npm run dev"
+    volumes:
+      - ../frontend:/app
+      - frontend_node_modules:/app/node_modules
+    ports:
+      - "8002:8002"
+    depends_on:
+      web:
+        condition: service_healthy
+
+volumes:
+  dev_postgres_data:
+  dev_redis_data:
+  dev_venv:
+  frontend_node_modules:
