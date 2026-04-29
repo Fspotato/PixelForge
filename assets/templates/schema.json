@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "PixelForge Template",
+  "type": "object",
+  "required": ["key", "version", "name", "description", "target", "prompt", "palette", "processors"],
+  "properties": {
+    "key": { "type": "string" },
+    "version": { "type": "integer", "minimum": 1 },
+    "name": { "type": "string" },
+    "description": { "type": "string" },
+    "target": {
+      "type": "object",
+      "required": ["asset_type", "resolution", "final_grid", "views"],
+      "properties": {
+        "asset_type": { "type": "string" },
+        "resolution": { "type": "string" },
+        "final_grid": { "type": "string" },
+        "views": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "prompt": {
+      "type": "object",
+      "required": ["subject_template", "base", "style", "composition", "quality"],
+      "properties": {
+        "subject_template": { "type": "string" },
+        "base": { "type": "string" },
+        "style": { "type": "string" },
+        "composition": { "type": "string" },
+        "quality": { "type": "string" },
+        "containment": { "type": "string" },
+        "palette": { "type": "string" },
+        "background": { "type": "string" },
+        "forbidden": { "type": "string" }
+      }
+    },
+    "palette": {
+      "type": "object",
+      "required": ["palette_key", "enforce"],
+      "properties": {
+        "palette_key": { "type": "string" },
+        "enforce": { "type": "boolean" },
+        "allow_highlight_slots": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "processors": {
+      "type": "object",
+      "required": ["default", "config"],
+      "properties": {
+        "default": { "type": "array", "items": { "type": "string" } },
+        "config": { "type": "object" }
+      }
+    }
+  }
+}

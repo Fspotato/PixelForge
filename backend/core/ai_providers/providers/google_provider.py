@@ -117,7 +117,6 @@ class GoogleProvider(BaseProvider):
 
     def embed(self, request: EmbeddingRequest) -> EmbeddingResponse:
         """文本嵌入向量。"""
-        model = genai.GenerativeModel(request.model)
         result = genai.embed_content(
             model=request.model,
             content=request.texts,

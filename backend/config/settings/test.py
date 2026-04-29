@@ -1,7 +1,8 @@
 """測試環境設定。"""
 
-from .base import *
+# ruff: noqa: F403,F405
 
+from .base import *
 
 DJANGO_ENV = "test"
 

@@ -1,8 +1,6 @@
 """角色權限管理模組 API Views。"""
 
 from rest_framework.permissions import IsAuthenticated
-
-from .permissions import RBACPermission
 from rest_framework.views import APIView
 
 from core._common import BaseModelViewSet, StandardResponse
@@ -10,6 +8,7 @@ from core._event_bus import publish_event
 from core._logger import get_logger
 
 from .models import Permission, Role, RolePermission, UserRole
+from .permissions import RBACPermission
 from .serializers import (
     AssignRoleSerializer,
     MyPermissionsSerializer,
@@ -62,11 +61,14 @@ class RoleViewSet(BaseModelViewSet):
         serializer.is_valid(raise_exception=True)
         role = serializer.save()
         logger.info("角色已建立", extra={"role": role.name, "user": str(request.user.id)})
-        publish_event("rbac.role.created", {
-            "role_id": str(role.id),
-            "role_name": role.name,
-            "user_id": str(request.user.id),
-        })
+        publish_event(
+            "rbac.role.created",
+            {
+                "role_id": str(role.id),
+                "role_name": role.name,
+                "user_id": str(request.user.id),
+            },
+        )
         return StandardResponse.created(data=RoleSerializer(role).data, message="角色建立成功")
 
     def update(self, request, *args, **kwargs):
@@ -76,11 +78,14 @@ class RoleViewSet(BaseModelViewSet):
         serializer.is_valid(raise_exception=True)
         role = serializer.save()
         logger.info("角色已更新", extra={"role": role.name, "user": str(request.user.id)})
-        publish_event("rbac.role.updated", {
-            "role_id": str(role.id),
-            "role_name": role.name,
-            "user_id": str(request.user.id),
-        })
+        publish_event(
+            "rbac.role.updated",
+            {
+                "role_id": str(role.id),
+                "role_name": role.name,
+                "user_id": str(request.user.id),
+            },
+        )
         return StandardResponse.success(data=RoleSerializer(role).data, message="角色更新成功")
 
     def destroy(self, request, *args, **kwargs):
@@ -93,11 +98,14 @@ class RoleViewSet(BaseModelViewSet):
             )
         instance.soft_delete()
         logger.info("角色已刪除", extra={"role": instance.name, "user": str(request.user.id)})
-        publish_event("rbac.role.deleted", {
-            "role_id": str(instance.id),
-            "role_name": instance.name,
-            "user_id": str(request.user.id),
-        })
+        publish_event(
+            "rbac.role.deleted",
+            {
+                "role_id": str(instance.id),
+                "role_name": instance.name,
+                "user_id": str(request.user.id),
+            },
+        )
         return StandardResponse.success(message="角色刪除成功")
 
 
@@ -152,13 +160,16 @@ class RolePermissionsView(APIView):
             "角色權限已更新",
             extra={"role": role.name, "added": added, "user": str(request.user.id)},
         )
-        publish_event("rbac.role.permissions_updated", {
-            "role_id": str(role.id),
-            "role_name": role.name,
-            "action": "add",
-            "permission_count": added,
-            "user_id": str(request.user.id),
-        })
+        publish_event(
+            "rbac.role.permissions_updated",
+            {
+                "role_id": str(role.id),
+                "role_name": role.name,
+                "action": "add",
+                "permission_count": added,
+                "user_id": str(request.user.id),
+            },
+        )
         return StandardResponse.success(
             data=RoleSerializer(role).data,
             message=f"已新增 {added} 個權限",
@@ -189,13 +200,16 @@ class RolePermissionsView(APIView):
             "角色權限已移除",
             extra={"role": role.name, "removed": deleted_count, "user": str(request.user.id)},
         )
-        publish_event("rbac.role.permissions_updated", {
-            "role_id": str(role.id),
-            "role_name": role.name,
-            "action": "remove",
-            "permission_count": deleted_count,
-            "user_id": str(request.user.id),
-        })
+        publish_event(
+            "rbac.role.permissions_updated",
+            {
+                "role_id": str(role.id),
+                "role_name": role.name,
+                "action": "remove",
+                "permission_count": deleted_count,
+                "user_id": str(request.user.id),
+            },
+        )
         return StandardResponse.success(
             data=RoleSerializer(role).data,
             message=f"已移除 {deleted_count} 個權限",

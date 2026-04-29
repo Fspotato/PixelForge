@@ -1,5 +1,7 @@
-from celery import shared_task
 import importlib
+
+from celery import shared_task
+
 from .envelope import EventEnvelope
 
 

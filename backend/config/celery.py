@@ -4,7 +4,6 @@ import os
 from celery import Celery
 from celery.signals import worker_process_init
 
-
 os.environ.setdefault(
     "DJANGO_SETTINGS_MODULE",
     os.getenv("DJANGO_SETTINGS_MODULE", "config.settings.dev"),

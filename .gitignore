@@ -46,4 +46,8 @@ frontend/dist/
 # Beads / Dolt files (added by bd init)
 .dolt/
 *.db
+*.sqlite3
 .beads-credential-key
+
+# ref
+old_pixelforge/

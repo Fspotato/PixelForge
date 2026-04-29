@@ -72,10 +72,7 @@ class SubscriptionSyncAllView(APIView):
 
     def post(self, request):
         result = SubscriptionService.sync_all_subscriptions(request.user)
-        summary = (
-            f"已同步 {result['synced_count']} 筆訂閱，"
-            f"{result['changed_count']} 筆狀態已更新"
-        )
+        summary = f"已同步 {result['synced_count']} 筆訂閱，{result['changed_count']} 筆狀態已更新"
         return StandardResponse.success(data=result, message=summary)
 
 

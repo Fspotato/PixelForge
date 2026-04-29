@@ -87,7 +87,7 @@ def build_logging_config(
                 "directory": str(_resolve_log_directory(base_dir)),
                 "filename_prefix": _resolve_log_filename_prefix(resolved_environment),
                 "encoding": "utf-8",
-            }
+            },
         },
         "root": {
             "level": "INFO",

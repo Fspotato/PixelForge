@@ -180,10 +180,7 @@ class OrderSyncAllView(APIView):
 
     def post(self, request):
         result = PaymentService.sync_all_pending_transactions(request.user)
-        summary = (
-            f"已同步 {result['synced_count']} 筆交易，"
-            f"{result['changed_count']} 筆狀態已更新"
-        )
+        summary = f"已同步 {result['synced_count']} 筆交易，{result['changed_count']} 筆狀態已更新"
         return StandardResponse.success(
             data=result,
             message=summary,
@@ -421,9 +418,7 @@ class PaymentResultView(APIView):
                             else None
                         ),
                         "current_period_end": (
-                            sub.current_period_end.isoformat()
-                            if sub.current_period_end
-                            else None
+                            sub.current_period_end.isoformat() if sub.current_period_end else None
                         ),
                         "trial_end": sub.trial_end.isoformat() if sub.trial_end else None,
                         "cancel_at_period_end": sub.cancel_at_period_end,

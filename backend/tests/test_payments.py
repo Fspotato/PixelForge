@@ -402,9 +402,7 @@ class TestStripeGateway:
         PaymentService._handle_transaction_webhook("stripe", payload)
 
     @patch("core.payments.services.publish_event")
-    def test_handle_webhook_forwards_subscription_event(
-        self, mock_publish
-    ):
+    def test_handle_webhook_forwards_subscription_event(self, mock_publish):
         """handle_webhook 轉發訂閱事件到 Event Bus（直接傳入已驗證的 payload）。"""
         payload = WebhookPayload(
             gateway_name="stripe",

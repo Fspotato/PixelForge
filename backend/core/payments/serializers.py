@@ -11,20 +11,14 @@ from .models import Order, PaymentTransaction
 def get_catalog_item_name_by_id(catalog_item_id) -> str:
     """依商品 ID 解析商品名稱。"""
     return (
-        CatalogItem.objects.filter(id=catalog_item_id)
-        .values_list("name", flat=True)
-        .first()
-        or ""
+        CatalogItem.objects.filter(id=catalog_item_id).values_list("name", flat=True).first() or ""
     )
 
 
 def get_pricing_tier_name_by_id(pricing_tier_id) -> str:
     """依定價層級 ID 解析方案名稱。"""
     return (
-        PricingTier.objects.filter(id=pricing_tier_id)
-        .values_list("name", flat=True)
-        .first()
-        or ""
+        PricingTier.objects.filter(id=pricing_tier_id).values_list("name", flat=True).first() or ""
     )
 
 

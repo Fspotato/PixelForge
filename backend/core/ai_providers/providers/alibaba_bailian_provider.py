@@ -124,6 +124,18 @@ class AlibabaBailianProvider(BaseProvider):
         parsed = urlparse(base_url)
         return f"{parsed.scheme}://{parsed.netloc}"
 
+    @staticmethod
+    def _raise_for_status(response: httpx.Response, *, action: str) -> None:
+        """保留 DashScope 錯誤本文，方便排查 400 類型問題。"""
+        try:
+            response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            detail = response.text[:1000].strip()
+            message = f"{action}失敗: HTTP {response.status_code}"
+            if detail:
+                message = f"{message} - {detail}"
+            raise RuntimeError(message) from exc
+
     def chat(self, request: ChatRequest) -> ChatResponse:
         """同步聊天完成。"""
         response = self.client.chat.completions.create(
@@ -230,7 +242,7 @@ class AlibabaBailianProvider(BaseProvider):
 
         with httpx.Client(timeout=120) as client:
             resp = client.post(url, json=payload, headers=headers)
-            resp.raise_for_status()
+            self._raise_for_status(resp, action="圖像生成")
             data = resp.json()
 
         if "code" in data:
@@ -291,7 +303,7 @@ class AlibabaBailianProvider(BaseProvider):
         with httpx.Client(timeout=30) as client:
             # 建立任務
             resp = client.post(create_url, json=payload, headers=async_headers)
-            resp.raise_for_status()
+            self._raise_for_status(resp, action="圖像生成任務建立")
             data = resp.json()
 
             if "code" in data:
@@ -306,7 +318,7 @@ class AlibabaBailianProvider(BaseProvider):
             for _ in range(_IMAGE_POLL_MAX_ATTEMPTS):
                 time.sleep(_IMAGE_POLL_INTERVAL)
                 resp = client.get(task_url, headers=headers)
-                resp.raise_for_status()
+                self._raise_for_status(resp, action="圖像生成任務查詢")
                 result = resp.json()
                 status = result["output"]["task_status"]
 

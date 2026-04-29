@@ -12,11 +12,13 @@ class NotificationsConfig(AppConfig):
     def ready(self):
         import core.notifications.channels.email  # noqa: F401
         import core.notifications.channels.in_app  # noqa: F401
-
         from core.rbac.registry import PermissionRegistry
 
-        PermissionRegistry.register_module("notifications", [
-            ("send", "發送通知"),
-            ("manage_channels", "管理通知頻道"),
-            ("manage_preferences", "管理通知偏好"),
-        ])
+        PermissionRegistry.register_module(
+            "notifications",
+            [
+                ("send", "發送通知"),
+                ("manage_channels", "管理通知頻道"),
+                ("manage_preferences", "管理通知偏好"),
+            ],
+        )

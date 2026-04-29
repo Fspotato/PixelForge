@@ -19,11 +19,17 @@ class FileUploadSerializer(BaseSerializer):
         default=FileVisibility.PRIVATE,
         required=False,
     )
-    description = serializers.CharField(max_length=500, required=False, default="", allow_blank=True)
+    description = serializers.CharField(
+        max_length=500, required=False, default="", allow_blank=True
+    )
     metadata = serializers.JSONField(required=False, default=dict)
     backend = serializers.CharField(max_length=30, required=False, default="local")
-    related_object_type = serializers.CharField(max_length=100, required=False, default="", allow_blank=True)
-    related_object_id = serializers.CharField(max_length=100, required=False, default="", allow_blank=True)
+    related_object_type = serializers.CharField(
+        max_length=100, required=False, default="", allow_blank=True
+    )
+    related_object_id = serializers.CharField(
+        max_length=100, required=False, default="", allow_blank=True
+    )
 
 
 class FilePresignSerializer(BaseSerializer):
@@ -38,7 +44,9 @@ class FilePresignSerializer(BaseSerializer):
         default=FileVisibility.PRIVATE,
         required=False,
     )
-    description = serializers.CharField(max_length=500, required=False, default="", allow_blank=True)
+    description = serializers.CharField(
+        max_length=500, required=False, default="", allow_blank=True
+    )
     metadata = serializers.JSONField(required=False, default=dict)
     backend = serializers.CharField(max_length=30, required=False, default="local")
     expires_in = serializers.IntegerField(

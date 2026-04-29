@@ -4,8 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime, timezone
-
+from datetime import UTC, datetime
 
 _COLOR_BY_LEVEL = {
     logging.DEBUG: "\033[36m",
@@ -56,7 +55,7 @@ class JSONFormatter(logging.Formatter):
     def format(self, record: logging.LogRecord) -> str:
         message = record.getMessage()
         log_data: dict[str, object] = {
-            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "timestamp": datetime.now(UTC).isoformat(),
             "level": record.levelname,
             "logger": record.name,
             "message": message,
@@ -77,7 +76,7 @@ class PlainTextFormatter(logging.Formatter):
     """輸出適合寫入檔案的人類可讀日誌。"""
 
     def format(self, record: logging.LogRecord) -> str:
-        timestamp = datetime.fromtimestamp(record.created, tz=timezone.utc).strftime(
+        timestamp = datetime.fromtimestamp(record.created, tz=UTC).strftime(
             "%Y-%m-%d %H:%M:%S"
         )
         message = record.getMessage()
@@ -101,7 +100,7 @@ class ColoredConsoleFormatter(logging.Formatter):
 
     def format(self, record: logging.LogRecord) -> str:
         color = _COLOR_BY_LEVEL.get(record.levelno, "")
-        timestamp = datetime.fromtimestamp(record.created, tz=timezone.utc).strftime(
+        timestamp = datetime.fromtimestamp(record.created, tz=UTC).strftime(
             "%Y-%m-%d %H:%M:%S"
         )
         message = record.getMessage()

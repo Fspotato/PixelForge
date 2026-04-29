@@ -27,16 +27,17 @@ class MeView(APIView):
         return StandardResponse.success(data=serializer.data)
 
     def patch(self, request):
-        serializer = UserUpdateSerializer(
-            request.user, data=request.data, partial=True
-        )
+        serializer = UserUpdateSerializer(request.user, data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
         serializer.save()
         logger.info("使用者資料已更新", extra={"user_id": str(request.user.id)})
-        publish_event("accounts.profile.updated", {
-            "user_id": str(request.user.id),
-            "updated_fields": list(request.data.keys()),
-        })
+        publish_event(
+            "accounts.profile.updated",
+            {
+                "user_id": str(request.user.id),
+                "updated_fields": list(request.data.keys()),
+            },
+        )
         return StandardResponse.success(
             data=UserSerializer(request.user).data,
             message="個人資料更新成功",
@@ -51,9 +52,7 @@ class AvatarView(APIView):
     def post(self, request):
         serializer = AvatarUploadSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        user = AccountService.update_avatar(
-            request.user, serializer.validated_data["avatar"]
-        )
+        user = AccountService.update_avatar(request.user, serializer.validated_data["avatar"])
         logger.info("頭像已上傳", extra={"user_id": str(user.id)})
         return StandardResponse.success(
             data=UserSerializer(user).data,

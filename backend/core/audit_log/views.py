@@ -2,14 +2,13 @@
 
 from django.http import HttpResponse
 from rest_framework.permissions import IsAuthenticated
-
-from core.rbac.permissions import RBACPermission
 from rest_framework.views import APIView
 
 from core._common import StandardResponse
 from core._common.pagination import StandardPagination
 from core._event_bus import publish_event
 from core._logger import get_logger
+from core.rbac.permissions import RBACPermission
 
 from .exporters import CSVExporter, JSONExporter
 from .serializers import AuditEntryListSerializer, AuditEntrySerializer, AuditStatsSerializer
@@ -119,11 +118,14 @@ class AuditExportView(APIView):
             response = HttpResponse(content, content_type="text/csv; charset=utf-8")
             response["Content-Disposition"] = 'attachment; filename="audit_log.csv"'
 
-        publish_event("audit_log.log.exported", {
-            "user_id": str(request.user.id),
-            "format": export_format,
-            "record_count": len(queryset),
-        })
+        publish_event(
+            "audit_log.log.exported",
+            {
+                "user_id": str(request.user.id),
+                "format": export_format,
+                "record_count": len(queryset),
+            },
+        )
 
         return response
 

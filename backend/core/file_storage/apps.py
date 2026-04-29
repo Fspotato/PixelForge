@@ -9,12 +9,14 @@ class FileStorageConfig(AppConfig):
 
     def ready(self):
         import core.file_storage.backends.local  # noqa: F401 — 註冊本機 backend
-
         from core.rbac.registry import PermissionRegistry
 
-        PermissionRegistry.register_module("file_storage", [
-            ("upload", "上傳檔案"),
-            ("download", "下載檔案"),
-            ("delete", "刪除檔案"),
-            ("manage_quota", "管理儲存配額"),
-        ])
+        PermissionRegistry.register_module(
+            "file_storage",
+            [
+                ("upload", "上傳檔案"),
+                ("download", "下載檔案"),
+                ("delete", "刪除檔案"),
+                ("manage_quota", "管理儲存配額"),
+            ],
+        )

@@ -52,9 +52,7 @@ class User(AbstractBaseUser, PermissionsMixin, TimestampMixin):
 class SocialAccount(UUIDPrimaryKeyMixin, TimestampMixin, models.Model):
     """社交帳號綁定"""
 
-    user = models.ForeignKey(
-        User, on_delete=models.CASCADE, related_name="social_accounts"
-    )
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="social_accounts")
     provider = models.CharField(max_length=50)
     provider_uid = models.CharField(max_length=255)
     access_token = models.TextField(blank=True)
@@ -73,9 +71,7 @@ class SocialAccount(UUIDPrimaryKeyMixin, TimestampMixin, models.Model):
 class EmailVerification(UUIDPrimaryKeyMixin, TimestampMixin, models.Model):
     """Email 驗證紀錄"""
 
-    user = models.ForeignKey(
-        User, on_delete=models.CASCADE, related_name="email_verifications"
-    )
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="email_verifications")
     token = models.CharField(max_length=255, unique=True)
     verified_at = models.DateTimeField(null=True, blank=True)
     expires_at = models.DateTimeField()

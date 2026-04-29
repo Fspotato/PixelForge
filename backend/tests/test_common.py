@@ -15,7 +15,6 @@ from core._common.exceptions import ServiceError
 from core._common.pagination import StandardPagination
 from core._common.responses import StandardResponse
 
-
 pytestmark = pytest.mark.django_db(transaction=True)
 
 

@@ -28,12 +28,8 @@ class TaskProgress(TimestampMixin, models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4)
     celery_task_id = models.CharField(max_length=255, unique=True, db_index=True)
     task_name = models.CharField(max_length=255)
-    task_type = models.CharField(
-        max_length=20, choices=TaskType.choices, default=TaskType.COMMAND
-    )
-    status = models.CharField(
-        max_length=20, choices=TaskStatus.choices, default=TaskStatus.PENDING
-    )
+    task_type = models.CharField(max_length=20, choices=TaskType.choices, default=TaskType.COMMAND)
+    status = models.CharField(max_length=20, choices=TaskStatus.choices, default=TaskStatus.PENDING)
     progress = models.IntegerField(default=0)
     message = models.TextField(blank=True)
     result_data = models.JSONField(default=dict, blank=True)

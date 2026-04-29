@@ -1,5 +1,6 @@
 #!/usr/bin/env python
 """Django 管理指令入口。"""
+
 import os
 import sys
 

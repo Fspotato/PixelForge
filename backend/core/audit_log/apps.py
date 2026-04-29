@@ -11,10 +11,12 @@ class AuditLogConfig(AppConfig):
 
     def ready(self):
         import core.audit_log.event_handlers  # noqa: F401 — 註冊事件 handler
-
         from core.rbac.registry import PermissionRegistry
 
-        PermissionRegistry.register_module("audit_log", [
-            ("view", "檢視審計日誌"),
-            ("export", "匯出審計日誌"),
-        ])
+        PermissionRegistry.register_module(
+            "audit_log",
+            [
+                ("view", "檢視審計日誌"),
+                ("export", "匯出審計日誌"),
+            ],
+        )

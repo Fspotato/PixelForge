@@ -1,0 +1,49 @@
+{
+  "key": "forest",
+  "version": 2,
+  "name": "森林奇幻道具",
+  "description": "明亮自然、RPG 道具、低色數像素資產。",
+  "target": {
+    "asset_type": "single_sprite",
+    "resolution": "64x64",
+    "final_grid": "16x16",
+    "views": ["top-down", "side-view", "isometric"]
+  },
+  "prompt": {
+    "subject_template": "A single standalone game item sprite of {{subject}}.",
+    "base": "Centered isolated object, full object visible, readable silhouette, chunky 16-bit pixel art, crisp dark outline, hard pixel-art edges, strict 8-color low-color pixel art.",
+    "style": "Fantasy forest RPG asset, natural hand-crafted shape language, leaf, wood, moss, herb, potion, seed, stone, or relic materials only when they are part of the requested object.",
+    "composition": "Compact game icon composition, the requested object is the only focal element, no floating detached props outside the main silhouette.",
+    "containment": "The entire subject must fit fully inside the canvas, leave solid magenta margin on all four sides, no leaf, spark, smoke, shadow, orb, tail, weapon tip, or decoration may touch or cross the canvas edge.",
+    "palette": "Use exactly the forest 8-color family: dark outline, deep green shadow, leaf green, moss highlight, warm bark brown, tan wood, yellow-green accent, pale highlight.",
+    "background": "Background is 100% solid flat magenta (#FF00FF), no gradients, no shadow under the object, no scenery, no pattern, magenta background only.",
+    "quality": "Crisp edge separation, coherent light direction, small-game-icon readability, chunky pixel clusters, compressed tones using one shadow, one midtone, and one highlight family.",
+    "forbidden": "NO text, NO labels, NO words, NO letters, NO UI, NO speech bubbles, NO background items, NO extra loose materials."
+  },
+  "palette": {
+    "palette_key": "forest-8",
+    "enforce": true,
+    "allow_highlight_slots": 1
+  },
+  "processors": {
+    "default": ["bg_remover", "alpha_trimmer", "perfect_pixel", "palette_mapper", "thumbnail"],
+    "config": {
+      "bg_remover": {
+        "method": "magenta",
+        "threshold": 100,
+        "edge_threshold": 150
+      },
+      "perfect_pixel": {
+        "target_size": "none",
+        "sample_method": "adaptive",
+        "remove_outliers": true
+      },
+      "palette_mapper": {
+        "mode": "palette",
+        "palette_key": "forest-8",
+        "dither": true,
+        "dither_strength": 0.55
+      }
+    }
+  }
+}

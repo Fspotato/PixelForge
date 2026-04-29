@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
 from dataclasses import fields as dataclass_fields
-from typing import AsyncIterator
 
 import pytest
 
@@ -20,13 +20,11 @@ from core.ai_providers.schemas import (
     ChatRequest,
     ChatResponse,
     ChatStreamChunk,
-    EmbeddingRequest,
     EmbeddingResponse,
     MessageRole,
     UsageInfo,
 )
 from core.ai_providers.serializers import ChatRequestSerializer
-
 
 # --- Fixtures ---
 
@@ -217,14 +215,12 @@ class TestProviderRegistryRegisterAndList:
             provider_name = "another"
             supported_models = ["another-model"]
 
-            def chat(self, request):
-                ...
+            def chat(self, request): ...
 
             async def stream_chat(self, request):
                 yield  # pragma: no cover
 
-            def embed(self, request):
-                ...
+            def embed(self, request): ...
 
         providers = ProviderRegistry.list_providers()
         assert any(p["name"] == "another" for p in providers)

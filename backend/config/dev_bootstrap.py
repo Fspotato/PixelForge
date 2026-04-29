@@ -2,7 +2,6 @@
 
 import os
 
-
 os.environ.setdefault(
     "DJANGO_SETTINGS_MODULE",
     os.getenv("DJANGO_SETTINGS_MODULE", "config.settings.dev"),
@@ -10,13 +9,12 @@ os.environ.setdefault(
 
 import django
 
-
 django.setup()
 
-from django.core.management import call_command
-from django.db import connections
-from django.db.migrations.exceptions import InconsistentMigrationHistory
-from django.db.utils import DatabaseError
+from django.core.management import call_command  # noqa: E402
+from django.db import connections  # noqa: E402
+from django.db.migrations.exceptions import InconsistentMigrationHistory  # noqa: E402
+from django.db.utils import DatabaseError  # noqa: E402
 
 
 def _create_dev_superuser() -> None:

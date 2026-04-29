@@ -8,7 +8,9 @@ class StandardResponse:
     """統一 API 回應格式。"""
 
     @staticmethod
-    def success(data=None, message: str = "操作成功", status_code: int = status.HTTP_200_OK, meta=None) -> Response:
+    def success(
+        data=None, message: str = "操作成功", status_code: int = status.HTTP_200_OK, meta=None
+    ) -> Response:
         payload = {
             "status": "success",
             "message": message,

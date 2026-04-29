@@ -14,6 +14,7 @@ services:
       python -m config.dev_bootstrap"
     volumes:
       - ../backend:/app
+      - ../assets:/assets:ro
       - dev_venv:/app/.venv
       - ../scripts:/scripts:ro
     depends_on:
@@ -37,6 +38,7 @@ services:
       python manage.py runserver 0.0.0.0:8001"
     volumes:
       - ../backend:/app
+      - ../assets:/assets:ro
       - dev_venv:/app/.venv
       - ../scripts:/scripts:ro
     ports:
@@ -70,6 +72,7 @@ services:
       celery -A config worker --loglevel=info --uid=nobody --gid=nogroup"
     volumes:
       - ../backend:/app
+      - ../assets:/assets:ro
       - dev_venv:/app/.venv
       - ../scripts:/scripts:ro
     depends_on:
@@ -95,6 +98,7 @@ services:
       celery -A config beat --loglevel=info --uid=nobody --gid=nogroup"
     volumes:
       - ../backend:/app
+      - ../assets:/assets:ro
       - dev_venv:/app/.venv
       - ../scripts:/scripts:ro
     depends_on:

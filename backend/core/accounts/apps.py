@@ -8,5 +8,5 @@ class AccountsConfig(AppConfig):
     verbose_name = "帳號管理"
 
     def ready(self):
-        import core.accounts.signals  # noqa: F401
         import core.accounts.event_handlers  # noqa: F401
+        import core.accounts.signals  # noqa: F401

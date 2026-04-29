@@ -1,4 +1,3 @@
-import importlib
 from core._logger import get_logger
 
 logger = get_logger(__name__)
@@ -6,6 +5,7 @@ logger = get_logger(__name__)
 
 class HandlerRegistry:
     """事件 Handler 註冊中心"""
+
     _handlers: dict[str, list[dict]] = {}
 
     @classmethod

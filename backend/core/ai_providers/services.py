@@ -285,9 +285,7 @@ class AIProviderService:
             is_fallback=False,
         )
 
-    def _record_image_usage(
-        self, response: ImageGenerateResponse, request: ImageGenerateRequest
-    ):
+    def _record_image_usage(self, response: ImageGenerateResponse, request: ImageGenerateRequest):
         """記錄圖像生成用量。
 
         圖像生成不消耗傳統 token，以生成圖片數量記入 completion_tokens，

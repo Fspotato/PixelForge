@@ -517,9 +517,9 @@ class TestCookieAuthFlow:
         )
 
         api_client.cookies[settings.JWT_AUTH_COOKIE] = "invalid-access-cookie"
-        api_client.cookies[settings.JWT_REFRESH_COOKIE] = (
-            login_response.cookies[settings.JWT_REFRESH_COOKIE].value
-        )
+        api_client.cookies[settings.JWT_REFRESH_COOKIE] = login_response.cookies[
+            settings.JWT_REFRESH_COOKIE
+        ].value
         response = api_client.post("/api/v1/auth/refresh/", {}, format="json")
 
         assert response.status_code == status.HTTP_200_OK

@@ -112,8 +112,7 @@ class PaymentService:
         result_base = return_url if return_url else f"{frontend_url}/payment/result"
         sep = "&" if "?" in result_base else "?"
         effective_return_url = (
-            f"{result_base}{sep}transaction_id={txn.id}"
-            f"&gateway={gateway_name}&type=payment"
+            f"{result_base}{sep}transaction_id={txn.id}&gateway={gateway_name}&type=payment"
         )
         checkout_req = CheckoutRequest(
             transaction_id=str(txn.id),
@@ -225,7 +224,8 @@ class PaymentService:
         交易事件直接處理，訂閱/發票事件透過 Event Bus 轉發給 subscriptions 模塊。
         """
         if payload.event_type.startswith("customer.subscription."):
-            publish_event(                "payments.webhook.subscription_event",
+            publish_event(
+                "payments.webhook.subscription_event",
                 {
                     "gateway": gateway_name,
                     "event_type": payload.event_type,
@@ -481,9 +481,7 @@ class PaymentService:
         若交易已是 success/failed/refunded 等終態，直接返回；
         若仍 pending，則呼叫 gateway.sync_transaction 拉取最新狀態並更新 DB。
         """
-        txn = (
-            PaymentTransaction.objects.select_related("order").filter(id=transaction_id).first()
-        )
+        txn = PaymentTransaction.objects.select_related("order").filter(id=transaction_id).first()
         if txn is None:
             return None
 

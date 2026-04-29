@@ -273,12 +273,15 @@ class FileStorageService:
         record.last_accessed_at = timezone.now()
         record.save(update_fields=["download_count", "last_accessed_at", "updated_at"])
 
-        publish_event("file_storage.file.downloaded", {
-            "file_id": str(record.id),
-            "user_id": str(user.id),
-            "filename": record.original_filename,
-            "download_count": record.download_count,
-        })
+        publish_event(
+            "file_storage.file.downloaded",
+            {
+                "file_id": str(record.id),
+                "user_id": str(user.id),
+                "filename": record.original_filename,
+                "download_count": record.download_count,
+            },
+        )
 
         return url
 

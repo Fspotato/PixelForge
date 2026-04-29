@@ -1,9 +1,10 @@
 """事件匯流排模組單元測試。"""
 
-import pytest
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
-from core._event_bus import publish_event, subscribe, EventBus, HandlerRegistry
+import pytest
+
+from core._event_bus import HandlerRegistry, publish_event, subscribe
 from core._event_bus.envelope import EventEnvelope
 
 
@@ -19,7 +20,9 @@ class TestEventEnvelopeDefaults:
     """測試 EventEnvelope 預設值。"""
 
     def test_event_envelope_defaults(self):
-        envelope = EventEnvelope(event_type="payments.transaction.succeeded", payload={"amount": 100})
+        envelope = EventEnvelope(
+            event_type="payments.transaction.succeeded", payload={"amount": 100}
+        )
 
         # event_id 格式：evt_ 前綴 + 12 位十六進位字串
         assert envelope.event_id.startswith("evt_")

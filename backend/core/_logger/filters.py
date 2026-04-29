@@ -8,7 +8,6 @@ import threading
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-
 _MASK = "***"
 _local = threading.local()
 
@@ -19,7 +18,7 @@ _SENSITIVE_KEY_PATTERN = re.compile(
 _SENSITIVE_STRING_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
     (
         re.compile(
-            r'((?:password|passwd|pwd|token|secret|api[_-]?key|authorization)\s*[=:]\s*)([^\s,;]+)',
+            r"((?:password|passwd|pwd|token|secret|api[_-]?key|authorization)\s*[=:]\s*)([^\s,;]+)",
             re.IGNORECASE,
         ),
         rf"\1{_MASK}",

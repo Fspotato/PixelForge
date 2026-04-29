@@ -8,7 +8,6 @@ from core._logger import get_logger
 from .exceptions import ServiceError
 from .responses import StandardResponse
 
-
 logger = get_logger(__name__)
 
 
@@ -42,7 +41,9 @@ def global_exception_handler(exc, context):
             "error": {
                 "code": "API_ERROR",
                 "message": _normalize_error_message(detail),
-                "details": response.data if isinstance(response.data, dict) else {"detail": response.data},
+                "details": response.data
+                if isinstance(response.data, dict)
+                else {"detail": response.data},
             },
         }
         return response

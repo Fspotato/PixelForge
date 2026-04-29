@@ -73,6 +73,13 @@ INSTALLED_APPS = [
     "core.rbac",
     "core.api_keys",
     "core.file_storage",
+    # PixelForge 業務模組
+    "modules._forge_shared",
+    "modules.style_presets",
+    "modules.generation_jobs",
+    "modules.asset_library",
+    "modules.image_processing",
+    "modules.admin_operations",
 ]
 
 MIDDLEWARE = [

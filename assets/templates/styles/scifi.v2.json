@@ -1,0 +1,49 @@
+{
+  "key": "scifi",
+  "version": 2,
+  "name": "科幻能源道具",
+  "description": "金屬、電路、能源核心與霓虹效果的像素資產。",
+  "target": {
+    "asset_type": "single_sprite",
+    "resolution": "64x64",
+    "final_grid": "16x16",
+    "views": ["top-down", "side-view", "isometric"]
+  },
+  "prompt": {
+    "subject_template": "A single standalone game item sprite of {{subject}}.",
+    "base": "Centered isolated object, full object visible, readable silhouette, chunky 16-bit pixel art, crisp dark outline, hard pixel-art edges, strict 8-color low-color pixel art.",
+    "style": "Futuristic sci-fi game asset, compact industrial shape language, plated metal, glass, circuit, energy cell, neon accent, or cyber device materials only when they are part of the requested object.",
+    "composition": "Compact game icon composition, the requested object is the only focal element, no floating detached circuits, sparks, particles, panels, or UI elements outside the main silhouette.",
+    "containment": "The entire subject must fit fully inside the canvas, leave solid magenta margin on all four sides, no glow, beam, spark, cable, antenna, blade tip, or trail may touch or cross the canvas edge.",
+    "palette": "Use exactly the sci-fi 8-color family: navy outline, dark blue metal, steel blue, pale highlight, teal shadow, cyan energy, dark magenta accent, hot pink energy.",
+    "background": "Background is 100% solid flat magenta (#FF00FF), no gradients, no shadow under the object, no scenery, no pattern, magenta background only.",
+    "quality": "Clean hard-surface silhouette, controlled glow shapes attached to the object, high contrast readable icon, crisp edge separation, compressed tones using one shadow, one midtone, and one highlight family.",
+    "forbidden": "NO text, NO labels, NO words, NO letters, NO UI, NO speech bubbles, NO background items, NO extra loose materials."
+  },
+  "palette": {
+    "palette_key": "scifi-8",
+    "enforce": true,
+    "allow_highlight_slots": 1
+  },
+  "processors": {
+    "default": ["bg_remover", "alpha_trimmer", "perfect_pixel", "palette_mapper", "thumbnail"],
+    "config": {
+      "bg_remover": {
+        "method": "magenta",
+        "threshold": 100,
+        "edge_threshold": 150
+      },
+      "perfect_pixel": {
+        "target_size": "none",
+        "sample_method": "adaptive",
+        "remove_outliers": true
+      },
+      "palette_mapper": {
+        "mode": "palette",
+        "palette_key": "scifi-8",
+        "dither": true,
+        "dither_strength": 0.45
+      }
+    }
+  }
+}

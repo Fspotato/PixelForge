@@ -2,9 +2,9 @@
 
 import uuid
 
+from celery import Task
 from django.utils import timezone
 
-from celery import Task
 from core._event_bus import publish_event
 from core._logger import get_logger
 from core._logger.filters import clear_context, set_context
@@ -45,14 +45,21 @@ class BaseTask(Task):
 
         set_context(request_id=request_id, user_id=user_id)
 
-        progress = TaskProgress.objects.create(
+        progress, _ = TaskProgress.objects.update_or_create(
             celery_task_id=self.request.id,
-            task_name=self.name,
-            task_type=self.task_type,
-            status=TaskStatus.RUNNING,
-            started_at=timezone.now(),
-            request_id=request_id,
-            user_id=user_id,
+            defaults={
+                "task_name": self.name,
+                "task_type": self.task_type,
+                "status": TaskStatus.RUNNING,
+                "progress": 0,
+                "message": "",
+                "started_at": timezone.now(),
+                "completed_at": None,
+                "request_id": request_id,
+                "user_id": user_id,
+                "error_message": "",
+                "retry_count": self.request.retries,
+            },
         )
 
         logger.info("任務開始: %s", self.name, extra={"task_id": self.request.id})
@@ -92,14 +99,12 @@ class BaseTask(Task):
             raise
 
         except Exception as exc:
-            logger.error(
-                "任務失敗: %s - %s", self.name, exc, extra={"task_id": self.request.id}
-            )
+            logger.error("任務失敗: %s - %s", self.name, exc, extra={"task_id": self.request.id})
             progress.retry_count = self.request.retries
             progress.status = TaskStatus.RETRYING
             progress.error_message = str(exc)
             progress.save()
-            raise self.retry(exc=exc, countdown=self.default_retry_delay)
+            raise self.retry(exc=exc, countdown=self.default_retry_delay) from exc
 
         finally:
             clear_context()

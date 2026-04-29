@@ -8,10 +8,10 @@ from core.accounts.models import User, UserStatus
 from core.accounts.serializers import AvatarUploadSerializer, UserSerializer
 from core.accounts.services import AccountService
 
-
 # ---------------------------------------------------------------------------
 # UserStatus 枚舉
 # ---------------------------------------------------------------------------
+
 
 class TestUserStatusChoices:
     """測試 UserStatus 枚舉值"""
@@ -38,6 +38,7 @@ class TestUserStatusChoices:
 # ---------------------------------------------------------------------------
 # User Model 欄位檢查
 # ---------------------------------------------------------------------------
+
 
 class TestUserModelFields:
     """測試 User model 有正確的欄位（透過 _meta 檢查，不需要 DB）"""
@@ -81,7 +82,7 @@ class TestUserModelFields:
 
     def test_has_settings_data_field(self):
         field = User._meta.get_field("settings_data")
-        assert field.default == dict
+        assert field.default is dict
 
     def test_has_created_at_field(self):
         User._meta.get_field("created_at")
@@ -100,13 +101,22 @@ class TestUserModelFields:
 # UserSerializer 欄位
 # ---------------------------------------------------------------------------
 
+
 class TestUserSerializerFields:
     """測試 UserSerializer 的 fields 列表"""
 
     def test_serializer_fields(self):
         expected_fields = {
-            "id", "email", "first_name", "last_name", "full_name",
-            "avatar", "status", "last_login_at", "settings_data", "created_at",
+            "id",
+            "email",
+            "first_name",
+            "last_name",
+            "full_name",
+            "avatar",
+            "status",
+            "last_login_at",
+            "settings_data",
+            "created_at",
         }
         serializer = UserSerializer()
         assert set(serializer.fields.keys()) == expected_fields
@@ -123,6 +133,7 @@ class TestUserSerializerFields:
 # ---------------------------------------------------------------------------
 # AvatarUploadSerializer 驗證
 # ---------------------------------------------------------------------------
+
 
 class TestAvatarUploadSerializer:
     """測試頭像上傳序列化器的驗證邏輯"""
@@ -196,6 +207,7 @@ class TestAvatarUploadSerializer:
 # ---------------------------------------------------------------------------
 # AccountService 方法存在性
 # ---------------------------------------------------------------------------
+
 
 class TestAccountServiceMethods:
     """測試 AccountService 有所需的方法"""

@@ -10,8 +10,11 @@ class APIKeysConfig(AppConfig):
     def ready(self):
         from core.rbac.registry import PermissionRegistry
 
-        PermissionRegistry.register_module("api_keys", [
-            ("create", "建立 API 金鑰"),
-            ("view", "檢視 API 金鑰"),
-            ("revoke", "撤銷 API 金鑰"),
-        ])
+        PermissionRegistry.register_module(
+            "api_keys",
+            [
+                ("create", "建立 API 金鑰"),
+                ("view", "檢視 API 金鑰"),
+                ("revoke", "撤銷 API 金鑰"),
+            ],
+        )

@@ -56,11 +56,13 @@ def health_check(_request: HttpRequest) -> JsonResponse:
 
     overall = "ok" if all(c["status"] == "ok" for c in checks.values()) else "degraded"
 
-    return JsonResponse({
-        "status": overall,
-        "version": "0.1.0",
-        "checks": checks,
-    })
+    return JsonResponse(
+        {
+            "status": overall,
+            "version": "0.1.0",
+            "checks": checks,
+        }
+    )
 
 
 @csrf_exempt
@@ -99,4 +101,10 @@ urlpatterns = [
     path("rbac/", include("core.rbac.urls")),
     path("api-keys/", include("core.api_keys.urls")),
     path("files/", include("core.file_storage.urls")),
+    # PixelForge 業務端點
+    path("style-presets/", include("modules.style_presets.urls")),
+    path("generation-jobs/", include("modules.generation_jobs.urls")),
+    path("assets/", include("modules.asset_library.urls")),
+    path("image-processing/", include("modules.image_processing.urls")),
+    path("admin-operations/", include("modules.admin_operations.urls")),
 ]

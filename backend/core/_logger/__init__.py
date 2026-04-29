@@ -6,7 +6,6 @@ import logging
 
 from .config import configure_logging
 
-
 _configured = False
 
 

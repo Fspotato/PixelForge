@@ -2,11 +2,8 @@
 
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 from core._task_queue.models import TaskStatus, TaskType
 from core._task_queue.retry_policies import RetryPolicy
-
 
 # ── RetryPolicy 測試（純邏輯，不需 DB） ──────────────────────────
 
@@ -115,7 +112,9 @@ class TestBaseTaskUpdateProgress:
         mock_request = MagicMock()
         mock_request.id = task_id
         # Celery 的 request 屬性透過 request_stack 取得，需要 mock 整個 property
-        with patch.object(type(task), "request", new_callable=lambda: property(lambda self: mock_request)):
+        with patch.object(
+            type(task), "request", new_callable=lambda: property(lambda self: mock_request)
+        ):
             pass
         task._default_request = mock_request
         # 直接 patch request property
@@ -158,3 +157,46 @@ class TestBaseTaskUpdateProgress:
         task.update_progress(0)
 
         mock_qs.update.assert_called_once_with(progress=0, message="")
+
+
+class TestBaseTaskCall:
+    """測試 BaseTask.__call__ 的進度紀錄行為。"""
+
+    @patch("core._task_queue.base_task.clear_context")
+    @patch("core._task_queue.base_task.set_context")
+    @patch("core._task_queue.base_task.publish_event")
+    @patch("core._task_queue.base_task.TaskProgress")
+    def test_call_reuses_existing_progress_for_retry(
+        self,
+        mock_progress_model,
+        _mock_publish_event,
+        _mock_set_context,
+        _mock_clear_context,
+    ):
+        """重試同一個 Celery task id 時不應重複 create 進度列。"""
+        from core._task_queue.base_task import BaseTask
+
+        class SuccessfulTask(BaseTask):
+            name = "test.success"
+
+            def run(self):
+                return {"ok": True}
+
+        task = SuccessfulTask()
+        mock_request = MagicMock()
+        mock_request.id = "retry-task-id"
+        mock_request.retries = 1
+        mock_request.get.side_effect = lambda key, default=None: {
+            "request_id": "request-1",
+            "user_id": "user-1",
+        }.get(key, default)
+        type(task).request = property(lambda self: mock_request)
+        progress = MagicMock()
+        mock_progress_model.objects.update_or_create.return_value = (progress, False)
+
+        result = task()
+
+        assert result == {"ok": True}
+        mock_progress_model.objects.update_or_create.assert_called_once()
+        assert not mock_progress_model.objects.create.called
+        assert progress.status == TaskStatus.SUCCESS
