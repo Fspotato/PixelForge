@@ -10,7 +10,7 @@ export function Layout({ children }: { children: ReactNode }) {
       {/* 頂部導覽列 */}
       <header className="flex items-center justify-between px-4 py-3 border-b border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-900 shrink-0">
         <h1 className="text-lg font-bold flex items-center gap-2">
-          🔧 <span>API 測試面板</span>
+          ✨ <span>PixelForge</span>
         </h1>
         <div className="flex items-center gap-3">
           {auth.isAuthenticated && (
