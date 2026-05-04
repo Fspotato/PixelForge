@@ -1,4 +1,4 @@
-# AI Service Framework — 接口命名統一規則
+# PixelForge 平台 — 接口命名統一規則
 
 ## 1. 設計目標
 

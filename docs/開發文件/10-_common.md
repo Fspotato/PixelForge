@@ -1,4 +1,4 @@
-# AI Service Framework — 共用工具模組設計 (`_common`)
+# PixelForge 平台 — 共用工具模組設計 (`_common`)
 
 > 🔒 **內部模組**：不暴露任何 API，提供框架級共用基底與工具。
 

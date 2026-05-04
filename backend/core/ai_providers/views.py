@@ -20,69 +20,44 @@ from .serializers import (
     EmbeddingRequestSerializer,
     ImageGenerateRequestSerializer,
 )
-from .services import AIProviderService
+from .services import (
+    AIProviderService,
+    get_default_provider_name_from_env,
+    get_env_default_model,
+    parse_env_list,
+)
 
 logger = get_logger(__name__)
 
-# ── 供應商預設配置（可透過 ENV 覆蓋模型列表） ──────────
+# ── 供應商配置（模型列表完全由 ENV 提供） ──────────
 
 _PROVIDER_DEFAULTS = [
+    {
+        "id": "azure_openai",
+        "name": "Azure OpenAI",
+        "env_prefix": "AZURE_OPENAI",
+    },
     {
         "id": "alibaba_bailian",
         "name": "阿里雲百煉",
         "env_prefix": "ALIBABA_BAILIAN",
-        "default_text_models": [
-            "qwen-plus",
-            "qwen-max",
-            "qwen-turbo",
-            "qwen3.5-plus",
-            "qwen3.5-turbo",
-            "qwen-long",
-        ],
-        "default_image_models": [
-            "qwen-image-plus",
-            "qwen-image-max",
-            "qwen-image-2.0",
-            "qwen-image-2.0-pro",
-        ],
     },
     {
         "id": "openai",
         "name": "OpenAI",
         "env_prefix": "OPENAI",
-        "default_text_models": ["gpt-4o", "gpt-4o-mini", "gpt-4-turbo", "gpt-3.5-turbo"],
-        "default_image_models": ["dall-e-3", "dall-e-2"],
     },
     {
         "id": "anthropic",
         "name": "Anthropic",
         "env_prefix": "ANTHROPIC",
-        "default_text_models": ["claude-sonnet-4-20250514", "claude-3-5-haiku-20241022"],
-        "default_image_models": [],
     },
     {
         "id": "google",
         "name": "Google Gemini",
         "env_prefix": "GOOGLE_AI",
-        "default_text_models": ["gemini-2.0-flash", "gemini-1.5-pro"],
-        "default_image_models": ["imagen-3.0-generate-002"],
-    },
-    {
-        "id": "azure_openai",
-        "name": "Azure OpenAI",
-        "env_prefix": "AZURE_OPENAI",
-        "default_text_models": ["gpt-4o", "gpt-4-turbo"],
-        "default_image_models": ["dall-e-3"],
     },
 ]
-
-
-def _parse_env_list(key: str, defaults: list[str]) -> list[str]:
-    """從 ENV 讀取逗號分隔列表，未設定則回傳預設值。"""
-    value = os.getenv(key, "")
-    if value.strip():
-        return [m.strip() for m in value.split(",") if m.strip()]
-    return defaults
 
 
 class ChatCompletionView(APIView):
@@ -256,8 +231,8 @@ class AiTestConfigView(APIView):
         providers = []
         for cfg in _PROVIDER_DEFAULTS:
             prefix = cfg["env_prefix"]
-            text_models = _parse_env_list(f"{prefix}_TEXT_MODELS", cfg["default_text_models"])
-            image_models = _parse_env_list(f"{prefix}_IMAGE_MODELS", cfg["default_image_models"])
+            text_models = parse_env_list(f"{prefix}_TEXT_MODELS")
+            image_models = parse_env_list(f"{prefix}_IMAGE_MODELS")
             api_key = os.getenv(f"{prefix}_API_KEY", "")
 
             providers.append(
@@ -267,12 +242,14 @@ class AiTestConfigView(APIView):
                     "available": bool(api_key),
                     "text_models": text_models,
                     "image_models": image_models,
-                    "default_text_model": text_models[0] if text_models else "",
-                    "default_image_model": image_models[0] if image_models else "",
+                    "default_text_model": get_env_default_model(cfg["id"], "text"),
+                    "default_image_model": get_env_default_model(cfg["id"], "image"),
                 }
             )
 
-        return StandardResponse.success(data={"providers": providers})
+        return StandardResponse.success(
+            data={"providers": providers, "default_provider": get_default_provider_name_from_env()}
+        )
 
 
 class ImageGenerateView(APIView):

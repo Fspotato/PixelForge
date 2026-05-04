@@ -31,13 +31,7 @@ class StandardResponse:
 
     @staticmethod
     def no_content(message: str = "刪除成功") -> Response:
-        return Response(
-            {
-                "status": "success",
-                "message": message,
-            },
-            status=status.HTTP_204_NO_CONTENT,
-        )
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
     @staticmethod
     def error(

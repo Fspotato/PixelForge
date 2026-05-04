@@ -1,4 +1,4 @@
-# AI Service Framework — Docker 容器化部署設計
+# PixelForge 平台 — Docker 容器化部署設計
 
 ## 1. 設計目標
 
@@ -402,7 +402,7 @@ version: "3.9"
 
 services:
   web:
-    image: ${DOCKER_REGISTRY}/ai-service-framework:${VERSION:-latest}
+    image: ${DOCKER_REGISTRY}/pixelforge:${VERSION:-latest}
     build:
       context: .
       dockerfile: docker/Dockerfile.prod
@@ -426,7 +426,7 @@ services:
           cpus: "0.5"
 
   worker:
-    image: ${DOCKER_REGISTRY}/ai-service-framework:${VERSION:-latest}
+    image: ${DOCKER_REGISTRY}/pixelforge:${VERSION:-latest}
     env_file:
       - .env.prod
     depends_on:
@@ -446,7 +446,7 @@ services:
           cpus: "2.0"
 
   beat:
-    image: ${DOCKER_REGISTRY}/ai-service-framework:${VERSION:-latest}
+    image: ${DOCKER_REGISTRY}/pixelforge:${VERSION:-latest}
     env_file:
       - .env.prod
     depends_on:

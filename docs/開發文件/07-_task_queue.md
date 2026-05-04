@@ -1,4 +1,4 @@
-# AI Service Framework — 分佈式任務佇列設計 (`_task_queue`)
+# PixelForge 平台 — 分佈式任務佇列設計 (`_task_queue`)
 
 > 🔒 **內部模組**：不暴露任何 API，提供框架級非同步任務能力。
 
@@ -322,7 +322,7 @@ from celery import Celery
 
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "config.settings.dev")
 
-app = Celery("ai_service_framework")
+app = Celery("pixelforge")
 app.config_from_object("django.conf:settings", namespace="CELERY")
 app.autodiscover_tasks()
 

@@ -1,4 +1,4 @@
-# AI Service Framework — 全局 Logger 模組設計 (`_logger`)
+# PixelForge 平台 — 全局 Logger 模組設計 (`_logger`)
 
 > 🔒 **內部模組**：不暴露任何 API，提供框架級日誌能力。
 

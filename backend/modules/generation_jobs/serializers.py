@@ -5,8 +5,8 @@ from rest_framework import serializers
 from core._common import BaseModelSerializer
 from modules._forge_shared.constants import DEFAULT_PROCESSORS, SUPPORTED_MODES, SUPPORTED_VIEWS
 from modules._forge_shared.processor_registry import ProcessorRegistry
+from modules.asset_library.models import Asset
 from modules.style_presets.models import StylePreset
-from modules.style_presets.services import StylePresetService
 
 from .models import GenerationJob
 
@@ -28,11 +28,6 @@ class GenerationJobCreateSerializer(serializers.Serializer):
     processor_config = serializers.DictField(required=False, default=dict)
     provider = serializers.CharField(required=False, allow_blank=True, default="")
     model = serializers.CharField(required=False, allow_blank=True, default="")
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        StylePresetService.sync_templates()
-        self.fields["preset"].queryset = StylePreset.objects.filter(is_active=True)
 
     def validate_processors(self, value):
         if not value:
@@ -85,3 +80,73 @@ class GenerationJobProgressSerializer(BaseModelSerializer):
         model = GenerationJob
         fields = ["id", "status", "percent", "subject", "error", "result_asset_id", "updated_at"]
         read_only_fields = fields
+
+
+class GenerationJobProgressSummarySerializer(BaseModelSerializer):
+    """即時任務摘要。"""
+
+    preset_key = serializers.CharField(source="preset.key", read_only=True)
+    preset_name = serializers.CharField(source="preset.name", read_only=True)
+
+    class Meta:
+        model = GenerationJob
+        fields = [
+            "id",
+            "status",
+            "subject",
+            "percent",
+            "preset_key",
+            "preset_name",
+            "error",
+            "retry_count",
+            "retry_of",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = fields
+
+
+class GenerationJobHistorySerializer(BaseModelSerializer):
+    """歷史任務摘要。"""
+
+    preset_key = serializers.CharField(source="preset.key", read_only=True)
+    preset_name = serializers.CharField(source="preset.name", read_only=True)
+    thumbnail_url = serializers.SerializerMethodField()
+    asset_id = serializers.SerializerMethodField()
+
+    class Meta:
+        model = GenerationJob
+        fields = [
+            "id",
+            "status",
+            "subject",
+            "percent",
+            "preset_key",
+            "preset_name",
+            "error",
+            "retry_count",
+            "retry_of",
+            "asset_id",
+            "thumbnail_url",
+            "created_at",
+            "updated_at",
+            "archived_at",
+        ]
+        read_only_fields = fields
+
+    def get_thumbnail_url(self, obj: GenerationJob) -> str | None:
+        asset = self._asset_for_job(obj)
+        if not asset:
+            return None
+        return f"/api/v1/assets/{asset.id}/thumbnail/"
+
+    def get_asset_id(self, obj: GenerationJob) -> str | None:
+        asset = self._asset_for_job(obj)
+        return str(asset.id) if asset else None
+
+    def _asset_for_job(self, obj: GenerationJob) -> Asset | None:
+        asset_map = self.context.get("asset_map") or {}
+        asset = asset_map.get(obj.id)
+        if asset is not None:
+            return asset
+        return Asset.objects.filter(generation_job_id=obj.id).first()

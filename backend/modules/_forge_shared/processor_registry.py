@@ -4,7 +4,12 @@ from __future__ import annotations
 
 from core._common import ValidationError
 
-from .constants import DISABLED_PROCESSORS, SELECTABLE_PROCESSORS, SYSTEM_PROCESSORS
+from .constants import (
+    DEFAULT_PROCESSORS,
+    DISABLED_PROCESSORS,
+    SELECTABLE_PROCESSORS,
+    SYSTEM_PROCESSORS,
+)
 from .processors import (
     AlphaTrimmer,
     BackgroundRemover,
@@ -48,7 +53,7 @@ class ProcessorRegistry:
 
     @classmethod
     def normalize_generation_processors(cls, processors: list[str] | None) -> list[str]:
-        names = list(processors or ["bg_remover", "alpha_trimmer", "perfect_pixel"])
+        names = list(processors or DEFAULT_PROCESSORS)
         for system_processor in SYSTEM_PROCESSORS:
             if system_processor not in names:
                 names.append(system_processor)

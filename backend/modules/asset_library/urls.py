@@ -2,7 +2,13 @@
 
 from django.urls import path
 
-from .views import AssetDetailView, AssetImageView, AssetListView, AssetRetryView
+from .views import (
+    AssetDetailView,
+    AssetImageView,
+    AssetListView,
+    AssetMetadataView,
+    AssetRetryView,
+)
 
 urlpatterns = [
     path("", AssetListView.as_view(), name="asset-list"),
@@ -19,5 +25,12 @@ urlpatterns = [
         {"image_type": "image"},
         name="asset-image",
     ),
+    path(
+        "<uuid:asset_id>/origin/",
+        AssetImageView.as_view(),
+        {"image_type": "origin"},
+        name="asset-origin",
+    ),
+    path("<uuid:asset_id>/metadata/", AssetMetadataView.as_view(), name="asset-metadata"),
     path("<uuid:asset_id>/retry/", AssetRetryView.as_view(), name="asset-retry"),
 ]

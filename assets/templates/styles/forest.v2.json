@@ -26,7 +26,7 @@
     "allow_highlight_slots": 1
   },
   "processors": {
-    "default": ["bg_remover", "alpha_trimmer", "perfect_pixel", "palette_mapper", "thumbnail"],
+    "default": ["bg_remover", "perfect_pixel", "upscaler", "thumbnail"],
     "config": {
       "bg_remover": {
         "method": "magenta",
@@ -35,8 +35,11 @@
       },
       "perfect_pixel": {
         "target_size": "none",
-        "sample_method": "adaptive",
+        "sample_method": "center",
         "remove_outliers": true
+      },
+      "upscaler": {
+        "scale": 10
       },
       "palette_mapper": {
         "mode": "palette",

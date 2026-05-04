@@ -2,135 +2,127 @@
 
 ## 概述
 
-`frontend/` 提供一個瀏覽器內的 API 測試工具，可用於驗證後端暴露的所有 REST 端點，包含認證登入、JWT Token 管理、Cookie 處理與系統健康檢查。
+目前 `frontend/` 的主角色是 **PixelForge 產品前端**；API 測試面板只是其中一個開發工具頁，不再是整個前端的唯一入口。
 
-技術棧：React 19 / Vite 6 / TypeScript / TanStack React Query / Tailwind CSS。
-
-## 功能
-
-### 日夜模式
-
-右上角 ☀️/🌙 按鈕可切換淺色與深色主題。選擇會存入 `localStorage`，重新開啟時自動套用。首次進入會跟隨系統偏好設定。
-
-### 自適應填入測試案例
-
-切換端點時，面板會自動填入該端點的預設測試資料：
-
-| 觸發情境 | 自動行為 |
-|---------|---------|
-| 登入成功 | 自動擷取並儲存 `access_token` / `refresh_token` |
-| 切換到需認證端點 | 自動注入 `Authorization: Bearer <token>` Header |
-| 切換到「登出」或「刷新 Token」 | 自動填入已儲存的 `refresh_token` 到請求內容 |
-| 建立 Ping 任務成功 | 自動記錄 `task_id` |
-| 切換到「查詢任務狀態」 | 自動填入已記錄的 `task_id` 到路徑參數 |
-
-### 支援的端點
-
-#### 系統
-
-| 方法 | 路徑 | 說明 |
-|------|------|------|
-| GET | `/api/v1/system/ping/` | 簡單健康檢查 |
-| GET | `/api/v1/system/health/` | 完整健康檢查（DB、Redis、Celery） |
-| POST | `/api/v1/system/tasks/ping/` | 建立非同步 Celery 任務 |
-| GET | `/api/v1/system/tasks/{task_id}/` | 查詢任務狀態 |
-
-#### 認證
-
-| 方法 | 路徑 | 說明 |
-|------|------|------|
-| POST | `/api/v1/auth/register/` | 註冊新帳號 |
-| POST | `/api/v1/auth/login/` | 帳號密碼登入 |
-| POST | `/api/v1/auth/refresh/` | 刷新 access token |
-| POST | `/api/v1/auth/logout/` | 登出（黑名單 refresh token）🔒 |
-| POST | `/api/v1/auth/verify-email/` | Email 驗證 |
-| POST | `/api/v1/auth/password-reset/` | 請求重設密碼 |
-| POST | `/api/v1/auth/password-reset-confirm/` | 確認重設密碼 |
-
-#### 帳號
-
-| 方法 | 路徑 | 說明 |
-|------|------|------|
-| GET | `/api/v1/accounts/me/` | 取得個人資料 🔒 |
-| PATCH | `/api/v1/accounts/me/` | 更新個人資料 🔒 |
-| POST | `/api/v1/accounts/me/deactivate/` | 停用帳號 🔒 |
-| POST | `/api/v1/accounts/me/change-email/` | 更改 Email 🔒 |
-| GET | `/api/v1/accounts/me/social-accounts/` | 社交帳號列表 🔒 |
-
-> 🔒 標記表示需要先登入取得 JWT Token。
-
-## 架構
+測試面板路由為：
 
 ```text
-frontend/
-├── index.html                     HTML 入口
-├── package.json                   依賴與指令
-├── vite.config.ts                 Vite 設定（含 API proxy）
-├── tailwind.config.ts             Tailwind 設定（dark mode: class）
-├── tsconfig*.json                 TypeScript 設定
-└── src/
-    ├── main.tsx                   React 掛載點
-    ├── App.tsx                    根元件（串接 Provider）
-    ├── index.css                  Tailwind 入口
-    ├── api/
-    │   └── client.ts              HTTP 請求封裝（含計時）
-    ├── hooks/
-    │   ├── useTheme.tsx           日夜模式 Context
-    │   └── useAuthStore.tsx       JWT Token 與動態值 Context
-    ├── components/
-    │   ├── Layout.tsx             整體佈局（Header + 內容區）
-    │   ├── ThemeToggle.tsx        日夜模式切換按鈕
-    │   ├── Sidebar.tsx            左側端點列表
-    │   ├── RequestPanel.tsx       請求建構面板
-    │   └── ResponsePanel.tsx      回應展示面板
-    ├── data/
-    │   └── testCases.ts           預定義測試案例
-    └── types/
-        └── index.ts               TypeScript 型別定義
+/test
 ```
+
+只有在 **Vite dev 模式** 且設定 `VITE_ENABLE_API_TESTER=true` 時才會啟用。正式使用情境仍以：
+
+- `/`：PixelForge 主工作台
+- `/history`：歷史任務
+- `/agent-generation`：Agent 生圖
+
+為主。
+
+## 目前用途
+
+API 測試面板用來快速驗證後端端點，包含：
+
+- 系統健康檢查與 Celery 範例任務
+- PixelForge 相關 API
+- 認證、帳號、通知、審計、權限、API 金鑰
+- AI Provider、商品目錄、金流支付、訂閱
+- 檔案儲存相關端點
+
+## 開關條件
+
+`frontend/src/App.tsx` 內的條件如下：
+
+```ts
+import.meta.env.DEV && import.meta.env.VITE_ENABLE_API_TESTER === "true"
+```
+
+代表：
+
+1. `npm run dev` 或 Vite dev server 啟動中
+2. 額外設定 `VITE_ENABLE_API_TESTER=true`
+
+兩者都成立時，瀏覽 `/test` 才會載入測試面板。
 
 ## 啟動方式
 
-### 搭配 Docker（推薦）
+### Docker 開發環境
 
 ```bash
 make dev
 ```
 
-前端會與後端一起啟動：
+之後若要開啟測試面板，需讓前端容器或本機 dev server 帶入 `VITE_ENABLE_API_TESTER=true`。
 
-- 後端 API：http://127.0.0.1:8001
-- 前端測試面板：http://127.0.0.1:8002
-
-Vite dev server 會自動將 `/api/*` 請求代理到後端服務，不需要額外設定 CORS。
-
-### 獨立啟動（需要先啟動後端）
+### 本機前端啟動
 
 ```bash
 cd frontend
 npm install
+set VITE_ENABLE_API_TESTER=true
 npm run dev
 ```
 
-預設代理目標為 `http://127.0.0.1:8001`，可透過環境變數覆蓋：
+若要修改 API 代理目標，可設定：
 
 ```bash
-API_PROXY_TARGET=http://your-backend:8001 npm run dev
+set API_PROXY_TARGET=http://127.0.0.1:8001
 ```
 
-## 測試流程範例
+Vite 會將 `/api/*` 代理到後端。
 
-1. `make dev` 啟動完整開發環境
-2. `make dev-create-superuser` 建立管理員帳號
-3. 瀏覽器開啟 http://127.0.0.1:8002
-4. 先點擊 **系統 → Ping** 確認後端連線正常
-5. 點擊 **認證 → 登入**，使用預填的管理員帳號送出請求
-6. 登入成功後，側邊欄顯示「✅ 已登入」
-7. 點擊任何 🔒 端點，Authorization header 自動注入
+## 功能特性
+
+### 自適應測試資料
+
+測試案例定義於 `frontend/src/data/testCases.ts`。切換案例時，面板會自動帶入：
+
+- 預設 request body
+- path params
+- 部分流程上下文（例如 ping task id）
+- 已登入狀態下需要的 cookie / 認證資訊
+
+### 目前案例分類
+
+依 `testCases.ts` 目前內容，主要分類如下：
+
+| 分類 | 範例 |
+|---|---|
+| 系統 | Ping、健康檢查、Celery 範例任務 |
+| PixelForge | 風格預設、生成任務、歷史、資產、圖片處理、管理統計 |
+| 認證 / 帳號 | 註冊、登入、Google OAuth、個人資料 |
+| AI 模型 | 供應商測試與圖片模型設定 |
+| 金流支付 / 訂閱管理 / 商品目錄 | Checkout、Webhook、同步、產品列表 |
+| 審計日誌 / 通知 / 權限管理 / API 金鑰 / 檔案儲存 | 平台治理與營運能力 |
+
+## 相關前端結構
+
+```text
+frontend/
+├── package.json
+├── vite.config.ts
+└── src/
+    ├── App.tsx
+    ├── api/client.ts
+    ├── components/
+    ├── hooks/
+    ├── data/testCases.ts
+    └── types/
+```
+
+與測試面板最直接相關的檔案：
+
+| 檔案 | 作用 |
+|---|---|
+| `frontend/src/App.tsx` | 根據 `/test` 路徑與 env flag 決定是否載入 `ApiTesterApp` |
+| `frontend/src/data/testCases.ts` | 所有測試案例定義 |
+| `frontend/src/api/client.ts` | 送出請求與回應解析 |
+| `frontend/src/components/RequestPanel.tsx` | 編輯 request |
+| `frontend/src/components/ResponsePanel.tsx` | 顯示 response |
+| `frontend/src/components/Sidebar.tsx` | 測試案例側邊欄 |
 
 ## 新增測試案例
 
-編輯 `frontend/src/data/testCases.ts`，依照 `TestCase` 介面新增項目：
+編輯 `frontend/src/data/testCases.ts`，依 `TestCase` 型別新增項目：
 
 ```typescript
 {
@@ -139,7 +131,7 @@ API_PROXY_TARGET=http://your-backend:8001 npm run dev
   name: "端點名稱",
   method: "POST",
   path: "/api/v1/my-module/endpoint/",
-  description: "端點說明文字",
+  description: "端點說明",
   requiresAuth: true,
   body: {
     field: "value",
@@ -147,9 +139,9 @@ API_PROXY_TARGET=http://your-backend:8001 npm run dev
 }
 ```
 
-支援的模板變數：
+建議：
 
-- `"{{refreshToken}}"` — 自動替換為目前的 refresh token
-- `"{{accessToken}}"` — 自動替換為目前的 access token
-
-路徑參數使用 `{param_name}` 語法搭配 `pathParams` 欄位定義。
+1. 分類名稱沿用既有分類
+2. 需要 path params 時使用 `{param}` 語法
+3. 需要登入時，讓案例 `requiresAuth: true`
+4. 若端點有特殊限制，寫在 `hint`

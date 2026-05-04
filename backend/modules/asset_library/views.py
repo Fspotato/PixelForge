@@ -44,6 +44,15 @@ class AssetImageView(APIView):
         return FileResponse(open(file_path, "rb"), content_type=record.content_type)
 
 
+class AssetMetadataView(APIView):
+    """取得資產 metadata。"""
+
+    def get(self, request, asset_id):
+        asset = AssetLibraryService.get_user_asset(request.user, asset_id)
+        metadata = AssetLibraryService.resolve_metadata(asset)
+        return StandardResponse.success(data=metadata, message="取得資產 metadata 成功")
+
+
 class AssetRetryView(APIView):
     """以資產快照建立新生成任務。"""
 

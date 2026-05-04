@@ -14,6 +14,7 @@ class GenerationJobAdmin(admin.ModelAdmin):
         "prompt",
         "negative_prompt",
         "metadata",
+        "metadata_file",
         "pipeline_warnings",
         "celery_task_id",
     ]

@@ -5,7 +5,7 @@ const CSRF_HEADER_NAME = "X-CSRFToken"
 const CSRF_ENDPOINT = "/api/v1/system/csrf/"
 const REFRESH_ENDPOINT = "/api/v1/auth/refresh/"
 const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS", "TRACE"])
-export const AUTH_CLEARED_EVENT = "ai-service-framework:auth-cleared"
+export const AUTH_CLEARED_EVENT = "pixelforge:auth-cleared"
 
 let refreshRequest: Promise<boolean> | null = null
 

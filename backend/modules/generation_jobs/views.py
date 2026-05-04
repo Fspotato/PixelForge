@@ -4,11 +4,14 @@ from rest_framework.views import APIView
 
 from core._common import StandardResponse
 from modules._forge_shared.enums import ForgeJobStatus
+from modules.asset_library.models import Asset
 
 from .models import GenerationJob
 from .serializers import (
     GenerationJobCreateSerializer,
+    GenerationJobHistorySerializer,
     GenerationJobProgressSerializer,
+    GenerationJobProgressSummarySerializer,
     GenerationJobSerializer,
 )
 from .services import GenerationJobService
@@ -77,3 +80,40 @@ class GenerationJobCancelView(APIView):
         job = GenerationJobService.cancel_job(user=request.user, job_id=job_id)
         serializer = GenerationJobSerializer(job)
         return StandardResponse.success(data=serializer.data, message="生成任務已取消")
+
+
+class GenerationJobHistoryListView(APIView):
+    """列出歷史任務。"""
+
+    def get(self, request):
+        jobs = list(GenerationJobService.list_user_history(user=request.user))
+        asset_map = {
+            asset.generation_job_id: asset
+            for asset in Asset.objects.filter(
+                user=request.user,
+                generation_job_id__in=[job.id for job in jobs],
+            )
+        }
+        serializer = GenerationJobHistorySerializer(
+            jobs,
+            many=True,
+            context={"asset_map": asset_map},
+        )
+        return StandardResponse.success(data=serializer.data, message="取得歷史任務成功")
+
+
+class GenerationJobLiveListView(APIView):
+    """列出即時任務。"""
+
+    def get(self, request):
+        jobs = GenerationJobService.list_live_jobs(user=request.user)
+        serializer = GenerationJobProgressSummarySerializer(jobs, many=True)
+        return StandardResponse.success(data=serializer.data, message="取得即時任務成功")
+
+
+class GenerationJobHistoryDetailView(APIView):
+    """刪除歷史任務。"""
+
+    def delete(self, request, job_id):
+        GenerationJobService.delete_history_job(user=request.user, job_id=job_id)
+        return StandardResponse.no_content(message="歷史任務已刪除")

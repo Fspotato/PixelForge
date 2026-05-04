@@ -15,12 +15,10 @@ class StylePresetService:
 
     @classmethod
     def list_active(cls):
-        cls.sync_templates()
         return StylePreset.objects.filter(is_active=True)
 
     @classmethod
     def get_active(cls, key: str) -> StylePreset:
-        cls.sync_templates()
         try:
             return StylePreset.objects.get(key=key, is_active=True)
         except StylePreset.DoesNotExist as exc:
@@ -28,10 +26,11 @@ class StylePresetService:
 
     @classmethod
     @transaction.atomic
-    def sync_templates(cls) -> None:
-        """將 assets/templates 的風格模板同步到查詢用 DB。"""
-        loader = TemplateLoader()
-        for template in loader.list_templates():
+    def import_templates(cls) -> int:
+        """將 assets/templates 的風格模板匯入 DB。"""
+        loader = TemplateLoader(use_database=False)
+        imported_count = 0
+        for sort_order, template in enumerate(loader.list_templates(), start=1):
             palette_key = template.palette.get("palette_key", "")
             palette_hex = []
             if palette_key:
@@ -46,9 +45,14 @@ class StylePresetService:
             StylePreset.objects.update_or_create(
                 key=template.key,
                 defaults={
+                    "version": template.version,
                     "name": template.name,
                     "description": template.description,
                     "resolution": str(template.target.get("final_grid", "16x16")),
+                    "target_config": template.target,
+                    "prompt_config": template.prompt,
+                    "palette_config": {**template.palette, "colors": palette_hex},
+                    "processor_defaults": template.processors,
                     "palette_hex": palette_hex,
                     "primary_palette": "",
                     "shadow_palette": "",
@@ -63,9 +67,18 @@ class StylePresetService:
                         "prompt": template.prompt,
                         "processors": template.processors,
                     },
+                    "sort_order": sort_order,
+                    "is_system": True,
                     "is_active": True,
                 },
             )
+            imported_count += 1
+        return imported_count
+
+    @classmethod
+    def sync_templates(cls) -> None:
+        """向後相容：將 assets/templates 的風格模板匯入 DB。"""
+        cls.import_templates()
 
     @classmethod
     def _display_text(cls, value: str, fallback: str) -> str:

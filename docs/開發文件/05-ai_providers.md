@@ -1,4 +1,4 @@
-# AI Service Framework — AI 供應商接入模組設計 (`ai_providers`)
+# PixelForge 平台 — AI 供應商接入模組設計 (`ai_providers`)
 
 > 🌐 **外部模組**：暴露 REST API，統一接入各家 AI 供應商的模型與服務。
 

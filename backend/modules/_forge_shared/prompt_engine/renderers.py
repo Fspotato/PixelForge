@@ -34,11 +34,10 @@ class PromptRenderer:
         clauses = [
             mode_clause,
             f"{plan.camera or plan.view} view",
-            "solid #FF00FF background",
+            "solid #FF00FF background, no shadow/glow",
             plan.composition,
             "centered full object, clear margin",
             plan.style_phrase,
-            "8-color palette",
             "no text/UI/extra props",
         ]
         clauses.extend(plan.constraints[:2])

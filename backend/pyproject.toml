@@ -1,7 +1,7 @@
 [project]
 name = "backend"
 version = "0.1.0"
-description = "AI service framework backend"
+description = "PixelForge backend"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [

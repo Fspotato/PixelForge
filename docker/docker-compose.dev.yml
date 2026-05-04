@@ -3,7 +3,7 @@ services:
     build:
       context: ..
       dockerfile: docker/Dockerfile.dev
-    container_name: ai-service-framework-dev-bootstrap
+    container_name: pixelforge-dev-bootstrap
     env_file:
       - ../backend/env/.env.dev
     environment:
@@ -27,7 +27,7 @@ services:
     build:
       context: ..
       dockerfile: docker/Dockerfile.dev
-    container_name: ai-service-framework-dev-web
+    container_name: pixelforge-dev-web
     env_file:
       - ../backend/env/.env.dev
     environment:
@@ -61,7 +61,7 @@ services:
     build:
       context: ..
       dockerfile: docker/Dockerfile.dev
-    container_name: ai-service-framework-dev-celery-worker
+    container_name: pixelforge-dev-celery-worker
     env_file:
       - ../backend/env/.env.dev
     environment:
@@ -87,7 +87,7 @@ services:
     build:
       context: ..
       dockerfile: docker/Dockerfile.dev
-    container_name: ai-service-framework-dev-celery-beat
+    container_name: pixelforge-dev-celery-beat
     env_file:
       - ../backend/env/.env.dev
     environment:
@@ -111,7 +111,7 @@ services:
 
   postgres:
     image: pgvector/pgvector:pg17
-    container_name: ai-service-framework-dev-postgres
+    container_name: pixelforge-dev-postgres
     env_file:
       - ../backend/env/.env.dev
     ports:
@@ -127,7 +127,7 @@ services:
 
   redis:
     image: redis:8-alpine
-    container_name: ai-service-framework-dev-redis
+    container_name: pixelforge-dev-redis
     ports:
       - "6379:6379"
     volumes:
@@ -142,7 +142,7 @@ services:
     build:
       context: ..
       dockerfile: docker/Dockerfile.frontend.dev
-    container_name: ai-service-framework-dev-frontend
+    container_name: pixelforge-dev-frontend
     environment:
       API_PROXY_TARGET: http://web:8001
     command: >

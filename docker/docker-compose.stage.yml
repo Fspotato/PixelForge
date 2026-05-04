@@ -3,7 +3,7 @@ services:
     build:
       context: ..
       dockerfile: docker/Dockerfile.stage
-    container_name: ai-service-framework-stage-web
+    container_name: pixelforge-stage-web
     env_file:
       - ../backend/env/.env.stage
     environment:
@@ -33,7 +33,7 @@ services:
     build:
       context: ..
       dockerfile: docker/Dockerfile.stage
-    container_name: ai-service-framework-stage-celery-worker
+    container_name: pixelforge-stage-celery-worker
     env_file:
       - ../backend/env/.env.stage
     environment:
@@ -53,7 +53,7 @@ services:
     build:
       context: ..
       dockerfile: docker/Dockerfile.stage
-    container_name: ai-service-framework-stage-celery-beat
+    container_name: pixelforge-stage-celery-beat
     env_file:
       - ../backend/env/.env.stage
     environment:
@@ -72,7 +72,7 @@ services:
 
   postgres:
     image: pgvector/pgvector:pg17
-    container_name: ai-service-framework-stage-postgres
+    container_name: pixelforge-stage-postgres
     hostname: stage-postgres
     env_file:
       - ../backend/env/.env.stage
@@ -89,7 +89,7 @@ services:
 
   redis:
     image: redis:8-alpine
-    container_name: ai-service-framework-stage-redis
+    container_name: pixelforge-stage-redis
     hostname: stage-redis
     ports:
       - "6380:6379"

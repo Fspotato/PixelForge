@@ -76,9 +76,7 @@ class PlainTextFormatter(logging.Formatter):
     """輸出適合寫入檔案的人類可讀日誌。"""
 
     def format(self, record: logging.LogRecord) -> str:
-        timestamp = datetime.fromtimestamp(record.created, tz=UTC).strftime(
-            "%Y-%m-%d %H:%M:%S"
-        )
+        timestamp = datetime.fromtimestamp(record.created, tz=UTC).strftime("%Y-%m-%d %H:%M:%S")
         message = record.getMessage()
         request_id = getattr(record, "request_id", "-")
         user_id = getattr(record, "user_id", "-")
@@ -100,9 +98,7 @@ class ColoredConsoleFormatter(logging.Formatter):
 
     def format(self, record: logging.LogRecord) -> str:
         color = _COLOR_BY_LEVEL.get(record.levelno, "")
-        timestamp = datetime.fromtimestamp(record.created, tz=UTC).strftime(
-            "%Y-%m-%d %H:%M:%S"
-        )
+        timestamp = datetime.fromtimestamp(record.created, tz=UTC).strftime("%Y-%m-%d %H:%M:%S")
         message = record.getMessage()
         request_id = getattr(record, "request_id", "-")
         user_id = getattr(record, "user_id", "-")

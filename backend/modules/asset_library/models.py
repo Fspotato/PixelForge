@@ -56,6 +56,13 @@ class Asset(BaseModel):
         blank=True,
         related_name="asset_thumbnails",
     )
+    metadata_file = models.ForeignKey(
+        "file_storage.FileRecord",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="asset_metadata_files",
+    )
     metadata = models.JSONField(default=dict, blank=True, verbose_name="Metadata")
     prompt_snapshot = models.TextField(blank=True, default="", verbose_name="提示詞快照")
     negative_prompt_snapshot = models.TextField(

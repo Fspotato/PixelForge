@@ -12,6 +12,8 @@ class AssetSerializer(BaseModelSerializer):
 
     thumbnail_url = serializers.SerializerMethodField()
     image_url = serializers.SerializerMethodField()
+    origin_url = serializers.SerializerMethodField()
+    metadata_url = serializers.SerializerMethodField()
     generation_job_id = serializers.UUIDField(source="generation_job.id", read_only=True)
 
     class Meta:
@@ -33,6 +35,8 @@ class AssetSerializer(BaseModelSerializer):
             "model",
             "thumbnail_url",
             "image_url",
+            "origin_url",
+            "metadata_url",
             "created_at",
             "updated_at",
         ]
@@ -43,3 +47,9 @@ class AssetSerializer(BaseModelSerializer):
 
     def get_image_url(self, obj: Asset) -> str:
         return f"/api/v1/assets/{obj.id}/image/"
+
+    def get_origin_url(self, obj: Asset) -> str:
+        return f"/api/v1/assets/{obj.id}/origin/"
+
+    def get_metadata_url(self, obj: Asset) -> str:
+        return f"/api/v1/assets/{obj.id}/metadata/"

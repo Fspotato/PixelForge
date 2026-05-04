@@ -15,10 +15,11 @@ from .schemas import PaletteData, TemplateData
 
 
 class TemplateLoader:
-    """從 assets/templates 載入 PixelForge 模板。"""
+    """載入 PixelForge 風格模板。"""
 
-    def __init__(self, templates_root: Path | None = None):
+    def __init__(self, templates_root: Path | None = None, use_database: bool = True):
         self.templates_root = templates_root or self._resolve_templates_root()
+        self.use_database = use_database
 
     def list_templates(self) -> list[TemplateData]:
         """列出所有風格模板。"""
@@ -29,6 +30,11 @@ class TemplateLoader:
 
     def load_template(self, key: str) -> TemplateData:
         """依模板 key 載入最新版模板。"""
+        if self.use_database:
+            template = self._load_template_from_database(key)
+            if template is not None:
+                return template
+
         styles_dir = self.templates_root / "styles"
         candidates = sorted(styles_dir.glob(f"{key}.v*.json"))
         if not candidates:
@@ -37,6 +43,55 @@ class TemplateLoader:
                 return self.load_template_file(legacy_path)
             raise NotFoundError("風格模板", key)
         return self.load_template_file(candidates[-1])
+
+    def _load_template_from_database(self, key: str) -> TemplateData | None:
+        """從 StylePreset DB 資料建立 PromptEngine 模板。"""
+        from modules.style_presets.models import StylePreset
+
+        try:
+            preset = StylePreset.objects.get(key=key, is_active=True)
+        except StylePreset.DoesNotExist:
+            return None
+
+        model_params = preset.model_params or {}
+        target = dict(preset.target_config or {})
+        prompt = dict(preset.prompt_config or model_params.get("prompt") or {})
+        palette = dict(preset.palette_config or {})
+        processors = dict(preset.processor_defaults or model_params.get("processors") or {})
+        palette_key = palette.get("palette_key") or model_params.get("palette_key", "")
+        if palette_key and "palette_key" not in palette:
+            palette["palette_key"] = palette_key
+        if preset.palette_hex and "colors" not in palette:
+            palette["colors"] = list(preset.palette_hex)
+        if not target:
+            target = {
+                "asset_type": "single_sprite",
+                "resolution": preset.resolution,
+                "final_grid": preset.resolution,
+                "views": [],
+            }
+        raw = {
+            "key": preset.key,
+            "version": preset.version,
+            "name": preset.name,
+            "description": preset.description,
+            "target": target,
+            "prompt": prompt,
+            "palette": palette,
+            "processors": processors,
+        }
+        self._validate_template(raw, Path(f"StylePreset:{preset.key}"))
+        return TemplateData(
+            key=preset.key,
+            version=preset.version,
+            name=preset.name,
+            description=preset.description,
+            target=target,
+            prompt=prompt,
+            palette=palette,
+            processors=processors,
+            raw=raw,
+        )
 
     def load_template_file(self, path: Path) -> TemplateData:
         """載入指定模板檔。"""

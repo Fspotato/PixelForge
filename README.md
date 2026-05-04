@@ -1,155 +1,136 @@
-﻿# AI Service Framework
+﻿# PixelForge
 
-這是一個可直接作為新專案起點使用的 AI 後端模板，內建 Django、DRF、Celery、Redis、PostgreSQL、pgvector 與 Docker 開發流程。
+PixelForge 是一套以 **Django + DRF + Celery + React** 建構的像素遊戲資產生成平台，整合風格預設、單次生圖、後處理管線、資產庫、任務歷史、Agent 批次生圖，以及一組可重用的帳號、AI Provider、支付與權限模組。
 
-## 目標
+## 主要功能
 
-- `git clone` 後盡量少做手動設定
-- 使用 `make` 指令直接啟動 `dev`、`stage`、`prod` 環境
-- 將執行依賴集中在 Docker Compose 內管理
-- 提供一致的模板結構，方便後續擴充模組
+- **PixelForge 工作台**：建立單次生成任務、調整處理器、預覽資產與 metadata
+- **風格預設系統**：以 `StylePreset` 管理模板、色盤、Prompt 設定與預設處理器
+- **任務佇列與歷史**：`GenerationJob` 分離 live queue 與 history，並保存進度、錯誤與產物
+- **資產庫**：保存 `origin`、`processed`、`thumbnail`、`metadata` 等檔案與快照
+- **Agent 生圖**：聊天式規劃素材包，批次建立多個生成項目
+- **平台能力**：JWT 認證、Google OAuth、AI Provider、支付、審計、通知、RBAC、API Keys、檔案儲存
 
-## 開始使用
+## 技術棧
+
+| 層級 | 技術 |
+|---|---|
+| 後端 | Python 3.12、Django 5、DRF、Celery、Redis |
+| 資料庫 | PostgreSQL + pgvector（測試使用 SQLite） |
+| 前端 | React 19、Vite 6、TypeScript、Tailwind CSS |
+| 影像處理 | Pillow、NumPy、OpenCV |
+| 套件管理 | `uv`（後端）、`npm`（前端） |
+| 部署/開發 | Docker Compose、Makefile |
+
+## 快速開始
 
 ### 必要工具
-
-請先安裝下列工具：
 
 - Git
 - Docker Desktop
 - GNU Make
 
-### 第一次啟動
+### 啟動開發環境
 
 ```bash
-git clone <你的專案網址>
-cd ai-service-framework
+git clone <repo>
+cd PixelForge
 make dev
 ```
 
-`make dev` 會依序執行：
+`make dev` 會先 `git fetch/pull`，再重建 dev compose。啟動時會自動執行 migrations，並在 migration 歷史不一致時重建 dev schema。
 
-1. `git fetch --all --prune`
-2. `git pull --ff-only`
-3. `make dev-down`
-4. `make dev-up`
+### 開發環境入口
 
-開發環境啟動時會先跑一次 dev bootstrap：
+| 服務 | URL |
+|---|---|
+| 前端工作台 | http://127.0.0.1:8002 |
+| 後端 API | http://127.0.0.1:8001 |
+| 系統健康檢查 | http://127.0.0.1:8001/api/v1/system/health/ |
+| 系統 Ping | http://127.0.0.1:8001/api/v1/system/ping/ |
 
-- 先執行 Django migrations
-- 如果偵測到舊的 dev PostgreSQL volume 留下不一致的 migration 歷史，會自動重建 dev `public` schema
-- 重建後會重新套用 migrations，避免 `web` 與 `celery-beat` 因 schema 不完整而啟動失敗
+## 前端頁面
 
-啟動後可用下列網址檢查：
-
-- 開發環境健康檢查：http://127.0.0.1:8001/api/v1/system/ping/
-- 開發環境 Celery 範例任務建立：`POST http://127.0.0.1:8001/api/v1/system/tasks/ping/`
-- API 測試面板：http://127.0.0.1:8002
+| 路徑 | 用途 |
+|---|---|
+| `/` | PixelForge 主工作台：生成、處理器設定、任務進度、資產庫 |
+| `/history` | 歷史任務列表與刪除 |
+| `/agent-generation` | 聊天式 Agent 素材包生成 |
+| `/payment/result` | 金流回跳結果頁 |
+| `/test` | 開發模式 API 測試頁；僅在 `VITE_ENABLE_API_TESTER=true` 時啟用 |
 
 ## 常用指令
 
-### 開發環境
+### Docker / 環境
 
 - `make dev`
 - `make dev-up`
 - `make dev-down`
 - `make dev-logs`
 - `make dev-create-superuser`
-
-應用程式日誌會拆成兩份：`backend/logs/dev-logger-YYYY-MM-DD.log` 與 `backend/logs/dev-YYYY-MM-DD.log`
-
-### 預備環境
-
-- `make stage`
 - `make stage-up`
-- `make stage-down`
-- `make stage-logs`
-- `make stage-create-superuser`
-
-應用程式日誌會拆成兩份：`backend/logs/stage-logger-YYYY-MM-DD.log` 與 `backend/logs/stage-YYYY-MM-DD.log`
-
-### 正式環境
-
-- `make prod`
 - `make prod-up`
-- `make prod-down`
-- `make prod-logs`
-- `make prod-create-superuser`
 
-應用程式日誌會拆成兩份：`backend/logs/prod-logger-YYYY-MM-DD.log` 與 `backend/logs/prod-YYYY-MM-DD.log`
+### 後端
 
-## 目錄說明
-
-```text
-ai-service-framework/
-├── backend/       Django 專案與 Python 原始碼
-├── docker/        Dockerfile、Compose、Docker 使用文件
-├── docs/          架構與規範文件
-├── frontend/      API 測試面板（React / Vite / TypeScript）
-├── scripts/       啟動與維運輔助腳本
-└── Makefile       專案主要操作入口
+```bash
+cd backend
+uv run python -m pytest tests/ -v
+uv run ruff check .
+uv run ruff format .
+uv run python manage.py makemigrations
 ```
 
-## 環境檔
+### 前端
 
-模板已內建可直接啟動的環境檔：
+```bash
+cd frontend
+npm install
+npm run dev
+npm run build
+npx tsc -b
+```
 
-- `backend/env/.env.dev.example`
-- `backend/env/.env.stage.example`
-- `backend/env/.env.prod.example`
+## 目錄概覽
 
-若要改密碼、主機、資料庫名稱，直接修改對應檔案即可。
+```text
+PixelForge/
+├── assets/        風格模板與靜態資產
+├── backend/       Django 專案、核心模組與 PixelForge 業務模組
+├── docker/        Dockerfile 與 compose 設定
+├── docs/          架構、模組與操作文件
+├── frontend/      PixelForge 前端工作台與 dev API 測試頁
+├── scripts/       啟動與基礎設施腳本
+└── Makefile       dev / stage / prod 入口
+```
 
-## 背景任務驗證
+## 核心後端模組
 
-本模板已提供一個最小 Celery 範例任務：
+### `core/`
 
-- 建立任務：`POST /api/v1/system/tasks/ping/`
-- 查詢任務：`GET /api/v1/system/tasks/{task_id}/`
+- 內部模組：`_common`、`_event_bus`、`_logger`、`_task_queue`
+- 對外核心模組：`auth`、`accounts`、`ai_providers`、`catalog`、`payments`、`subscriptions`、`audit_log`、`notifications`、`rbac`、`api_keys`、`file_storage`
 
-這可用來驗證：
+### `modules/`
 
-- Django Web 正常
-- Redis 正常
-- Celery Worker 正常
-- Celery Result Backend 正常
+- `_forge_shared`：PixelForge 共用常數、列舉、處理器註冊、Prompt Engine
+- `style_presets`：風格預設資料
+- `generation_jobs`：生成任務與進度
+- `asset_library`：資產庫與檔案取得
+- `image_processing`：獨立圖片處理
+- `agent_generation`：聊天式批次生圖
+- `admin_operations`：營運/管理視角查詢
 
-## PostgreSQL 與 pgvector
+## 認證與資料流
 
-模板使用 `pgvector/pgvector:pg17` 映像，並在初始化時自動執行 extension 建立腳本。
+- API 使用 **JWT**，由後端寫入 cookie；不使用 `SessionAuthentication`
+- 單次生圖流程為：`StylePreset` → `GenerationJob` → Celery 生成/處理 → `Asset`
+- Agent 生圖流程為：`AgentGenerationSession` → `AgentGenerationItem` → 多個 `GenerationJob` → 多個 `Asset`
+- 每個資產可保存原圖、處理後圖片、縮圖與 metadata 檔案
 
-初始化腳本位置：
+## 文件入口
 
-- `scripts/init-pgvector.sql`
-
-## 金流支付模組
-
-本模板內建 `core/payments` 金流模組，採用統一 Model + Gateway 模式：
-
-- **支援閘道**：Stripe（含訂閱）、ECPay、NewebPay
-- **核心功能**：單次支付、訂閱管理（建立/取消/終止/到期）、退款、Webhook 處理
-- **事件信號**：14 個 Event Bus 事件，涵蓋交易與訂閱完整生命週期
-- **API 端點**：13 個 RESTful API（結帳、交易查詢、訂閱 CRUD、Stripe 產品列表）
-
-### 設定 Stripe
-
-1. 在 `backend/env/.env.dev` 填入 Stripe API Keys：
-   - `STRIPE_PUBLISHABLE_KEY`
-   - `STRIPE_SECRET_KEY`
-   - `STRIPE_WEBHOOK_SECRET`
-2. 在 Stripe Dashboard 設定 Webhook 端點：`https://your-domain/api/v1/payments/webhook/stripe/`
-3. 在 Django Admin 建立 `SubscriptionPlan`，填入 Stripe 的 Price ID
-
-詳細說明：[docs/架構優化方案/payments-stripe-optimization.md](docs/架構優化方案/payments-stripe-optimization.md)
-
-## 專案強制規範
-
-- 所有程式碼註解、文件註解、腳本註解一律使用繁體中文
-- 新增模板功能時，優先把依賴收斂到 Docker Compose 內
-- `Makefile` 只保留精簡入口，主要行為放在 Compose 或腳本中
-
-## 其他文件
-
-- Docker 使用說明：[docker/README.md](docker/README.md)
-- 命名規範：[docs/01-naming-conventions.md](docs/01-naming-conventions.md)
-- 詳細待辦：[docs/99-detailed-todo.md](docs/99-detailed-todo.md)
+- 專案總覽：[`docs/開發文件/00-framework-overview.md`](docs/開發文件/00-framework-overview.md)
+- 命名規範：[`docs/開發文件/01-naming-conventions.md`](docs/開發文件/01-naming-conventions.md)
+- API 測試頁：[`docs/功能詳細說明/api-tester.md`](docs/功能詳細說明/api-tester.md)
+- 模組開發指南：[`docs/功能詳細說明/module-development-guide.md`](docs/功能詳細說明/module-development-guide.md)

@@ -9,6 +9,7 @@ from typing import Any
 
 from core._common import ValidationError
 from core.ai_providers.schemas import ChatMessage, ChatRequest, MessageRole
+from core.ai_providers.services import get_env_default_model
 from modules._forge_shared.constants import SUPPORTED_MODES, SUPPORTED_VIEWS
 
 from .schemas import PromptPlan, TemplateData
@@ -18,6 +19,7 @@ class LLMPromptPlanner:
     """透過 LLM 產出結構化 PromptPlan。"""
 
     _JSON_RE = re.compile(r"\{.*\}", re.DOTALL)
+    _DEFAULT_MAX_TOKENS = 65536
     _SUPPORTED_ASSET_TYPES = {
         "prop",
         "character",
@@ -66,22 +68,60 @@ class LLMPromptPlanner:
             ],
             model=self.model,
             temperature=0.2,
-            max_tokens=420,
+            max_tokens=self._max_tokens(),
         )
         response = self.ai_service.chat(request, provider_name=self.provider_name)
-        payload = self._parse_json(response.content)
-        return self._normalize_plan(
-            payload,
-            subject=subject,
-            template=template,
-            view=view,
-            mode=mode,
-            planner={
-                "type": "llm",
-                "provider": self.provider_name or "default",
-                "model": self.model,
-            },
-        )
+        if response.content.strip():
+            try:
+                payload = self._parse_json(response.content)
+                planner_type = "llm"
+                planner_reason = ""
+            except ValidationError as exc:
+                payload = self._fallback_payload(
+                    subject=subject,
+                    template=template,
+                    view=view,
+                )
+                planner_type = "llm_invalid_json_fallback"
+                planner_reason = str(exc)
+        else:
+            payload = self._fallback_payload(
+                subject=subject,
+                template=template,
+                view=view,
+            )
+            planner_type = "llm_empty_fallback"
+            planner_reason = "empty_response"
+        planner = {
+            "type": planner_type,
+            "provider": self.provider_name or "default",
+            "model": self.model,
+            "reason": planner_reason,
+        }
+        try:
+            return self._normalize_plan(
+                payload,
+                subject=subject,
+                template=template,
+                view=view,
+                mode=mode,
+                planner=planner,
+            )
+        except (TypeError, ValueError, ValidationError) as exc:
+            planner["type"] = "llm_validation_fallback"
+            planner["reason"] = str(exc)
+            return self._normalize_plan(
+                self._fallback_payload(
+                    subject=subject,
+                    template=template,
+                    view=view,
+                ),
+                subject=subject,
+                template=template,
+                view=view,
+                mode=mode,
+                planner=planner,
+            )
 
     def _system_prompt(self) -> str:
         return (
@@ -119,6 +159,7 @@ class LLMPromptPlanner:
                     "constraints: max 3 short positive constraints",
                     "candidate_count: integer 3 unless subject is extremely simple",
                     "background must be #FF00FF",
+                    "no shadow, glow, gradient, floor, or ambient light on the background",
                 ],
                 "schema": {
                     "subject_phrase": "string",
@@ -158,6 +199,31 @@ class LLMPromptPlanner:
         if not isinstance(payload, dict):
             raise ValidationError("LLM Prompt Planner JSON 必須是物件")
         return payload
+
+    def _fallback_payload(
+        self,
+        *,
+        subject: str,
+        template: TemplateData,
+        view: str,
+    ) -> dict[str, Any]:
+        """LLM 空回應時產生可用的保守 PromptPlan，避免整個生成任務失敗。"""
+        asset_type = self._guess_asset_type(subject)
+        return {
+            "subject_phrase": self._compact_text(subject, 80),
+            "asset_type": asset_type,
+            "style_phrase": self._style_phrase(template.key),
+            "composition": self._composition_for(asset_type, view),
+            "camera": view,
+            "constraints": ["clean silhouette", "single asset", "no background shadow"],
+            "candidate_count": 1,
+            "qc_expectations": {
+                "min_foreground_ratio": 0.03,
+                "max_foreground_ratio": 0.72,
+                "require_margin": True,
+                "background": "#FF00FF",
+            },
+        }
 
     def _normalize_plan(
         self,
@@ -229,13 +295,13 @@ class LLMPromptPlanner:
         configured = os.getenv("PIXELFORGE_PROMPT_PLANNER_MODEL", "").strip()
         if configured:
             return configured
-        configured = os.getenv("ALIBABA_BAILIAN_TEXT_MODEL", "").strip()
-        if configured:
-            return configured
-        configured_list = os.getenv("ALIBABA_BAILIAN_TEXT_MODELS", "").strip()
-        if configured_list:
-            return configured_list.split(",")[0].strip()
-        return "qwen-plus"
+        return get_env_default_model(model_type="text")
+
+    def _max_tokens(self) -> int:
+        configured = os.getenv("PIXELFORGE_PROMPT_PLANNER_MAX_TOKENS", "").strip()
+        if not configured:
+            return self._DEFAULT_MAX_TOKENS
+        return self._clamp_int(configured, 420, 65536)
 
     def _style_phrase(self, template_key: str) -> str:
         mapping = {

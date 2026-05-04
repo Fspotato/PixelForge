@@ -106,5 +106,6 @@ urlpatterns = [
     path("generation-jobs/", include("modules.generation_jobs.urls")),
     path("assets/", include("modules.asset_library.urls")),
     path("image-processing/", include("modules.image_processing.urls")),
+    path("agent-generation/", include("modules.agent_generation.urls")),
     path("admin-operations/", include("modules.admin_operations.urls")),
 ]

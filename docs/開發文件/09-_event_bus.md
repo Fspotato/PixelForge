@@ -1,4 +1,4 @@
-# AI Service Framework — 事件匯流排設計 (`_event_bus`)
+# PixelForge 平台 — 事件匯流排設計 (`_event_bus`)
 
 > 🔒 **內部模組**：不暴露任何 API，提供框架級事件發布/訂閱能力。
 

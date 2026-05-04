@@ -1,4 +1,4 @@
-# AI Service Framework — 金流接入模組設計 (`payments`)
+# PixelForge 平台 — 金流接入模組設計 (`payments`)
 
 > 🌐 **外部模組**：暴露 REST API，統一接入各家金流供應商。
 

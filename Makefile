@@ -1,6 +1,6 @@
-COMPOSE_DEV = docker compose -p ai-service-framework-dev -f docker/docker-compose.dev.yml
-COMPOSE_STAGE = docker compose -p ai-service-framework-stage -f docker/docker-compose.stage.yml
-COMPOSE_PROD = docker compose -p ai-service-framework-prod -f docker/docker-compose.prod.yml
+COMPOSE_DEV = docker compose -p pixelforge-dev -f docker/docker-compose.dev.yml
+COMPOSE_STAGE = docker compose -p pixelforge-stage -f docker/docker-compose.stage.yml
+COMPOSE_PROD = docker compose -p pixelforge-prod -f docker/docker-compose.prod.yml
 
 .PHONY: git-sync
 .PHONY: dev dev-up dev-down dev-logs dev-create-superuser

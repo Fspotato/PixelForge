@@ -10,4 +10,4 @@ class AssetAdmin(admin.ModelAdmin):
     list_display = ["id", "subject", "user", "preset_key", "status", "created_at"]
     list_filter = ["status", "preset_key", "mode", "view"]
     search_fields = ["id", "subject", "prompt_snapshot", "user__email"]
-    readonly_fields = ["metadata", "prompt_snapshot", "negative_prompt_snapshot"]
+    readonly_fields = ["metadata", "metadata_file", "prompt_snapshot", "negative_prompt_snapshot"]

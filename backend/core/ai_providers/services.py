@@ -29,16 +29,97 @@ from .schemas import (
 logger = get_logger(__name__)
 
 # 重新匯出，維持公開介面一致
-__all__ = ["AIProviderService", "decrypt_api_key", "encrypt_api_key"]
+__all__ = [
+    "AIProviderService",
+    "decrypt_api_key",
+    "encrypt_api_key",
+    "get_available_default_provider_name_from_env",
+    "get_default_provider_name_from_env",
+    "get_env_default_model",
+    "get_env_model_list",
+    "normalize_provider_name",
+    "parse_env_list",
+]
 
 # 供應商名稱 → ENV 前綴對應表
 _ENV_PREFIX_MAP = {
+    "azure_openai": "AZURE_OPENAI",
     "alibaba_bailian": "ALIBABA_BAILIAN",
     "openai": "OPENAI",
     "anthropic": "ANTHROPIC",
     "google": "GOOGLE_AI",
-    "azure_openai": "AZURE_OPENAI",
 }
+
+_DEFAULT_API_PROVIDER = "azure_openai"
+_PROVIDER_ALIASES = {
+    "azure": "azure_openai",
+    "azure_openai": "azure_openai",
+    "alibaba": "alibaba_bailian",
+    "alibaba_bailian": "alibaba_bailian",
+    "openai": "openai",
+    "anthropic": "anthropic",
+    "google": "google",
+    "google_ai": "google",
+}
+
+
+def normalize_provider_name(provider_name: str | None) -> str:
+    """將 ENV 或前端傳入的 provider 名稱正規化為註冊 ID。"""
+    value = (provider_name or "").strip().lower()
+    if not value:
+        return ""
+    return _PROVIDER_ALIASES.get(value, value)
+
+
+def parse_env_list(key: str) -> list[str]:
+    """從 ENV 讀取逗號分隔列表，未設定則回傳空列表。"""
+    value = os.getenv(key, "")
+    if not value.strip():
+        return []
+    return [item.strip() for item in value.split(",") if item.strip()]
+
+
+def get_env_model_list(provider_name: str | None, model_type: str) -> list[str]:
+    """依 provider 與模型類型讀取 ENV 模型清單。"""
+    name = normalize_provider_name(provider_name) or _DEFAULT_API_PROVIDER
+    prefix = _ENV_PREFIX_MAP.get(name)
+    if not prefix:
+        return []
+    return parse_env_list(f"{prefix}_{model_type.upper()}_MODELS")
+
+
+def get_env_default_model(provider_name: str | None = None, model_type: str = "text") -> str:
+    """取得 ENV 指定的預設模型；未設定時回傳空字串。"""
+    name = normalize_provider_name(provider_name) or get_available_default_provider_name_from_env()
+    prefix = _ENV_PREFIX_MAP.get(name)
+    if not prefix:
+        return ""
+    explicit_model = os.getenv(f"{prefix}_{model_type.upper()}_MODEL", "").strip()
+    if explicit_model:
+        return explicit_model
+    models = parse_env_list(f"{prefix}_{model_type.upper()}_MODELS")
+    return models[0] if models else ""
+
+
+def get_default_provider_name_from_env() -> str:
+    """取得 ENV 設定的預設 provider，未設定時預設 Azure OpenAI。"""
+    return normalize_provider_name(os.getenv("API_PROVIDER", "")) or _DEFAULT_API_PROVIDER
+
+
+def get_available_default_provider_name_from_env() -> str:
+    """取得目前 ENV 中可使用的預設 provider。"""
+    default_provider = get_default_provider_name_from_env()
+    if default_provider in _ENV_PREFIX_MAP and _has_provider_api_key(default_provider):
+        return default_provider
+    for name in _ENV_PREFIX_MAP:
+        if _has_provider_api_key(name):
+            return name
+    return default_provider
+
+
+def _has_provider_api_key(provider_name: str) -> bool:
+    prefix = _ENV_PREFIX_MAP.get(provider_name)
+    return bool(prefix and os.getenv(f"{prefix}_API_KEY", ""))
 
 
 class AIProviderService:
@@ -226,6 +307,7 @@ class AIProviderService:
 
     def _get_provider_from_env(self, provider_name: str):
         """從環境變數讀取 Provider 設定並取得實例。"""
+        provider_name = normalize_provider_name(provider_name)
         prefix = _ENV_PREFIX_MAP.get(provider_name)
         if not prefix:
             raise ProviderNotFoundError(provider_name)
@@ -238,6 +320,28 @@ class AIProviderService:
         base_url = os.getenv(f"{prefix}_BASE_URL", "")
         if base_url:
             kwargs["base_url"] = base_url
+        if provider_name == "azure_openai":
+            azure_endpoint = os.getenv("AZURE_OPENAI_ENDPOINT", "").strip() or base_url
+            if azure_endpoint:
+                kwargs["azure_endpoint"] = azure_endpoint
+            api_version = os.getenv("AZURE_OPENAI_API_VERSION", "").strip()
+            if api_version:
+                kwargs["api_version"] = api_version
+            text_api = os.getenv("AZURE_OPENAI_TEXT_API", "").strip()
+            if text_api:
+                kwargs["text_api"] = text_api
+            image_response_format = os.getenv("AZURE_OPENAI_IMAGE_RESPONSE_FORMAT", "").strip()
+            if image_response_format:
+                kwargs["image_response_format"] = image_response_format
+            reasoning_effort = os.getenv("AZURE_OPENAI_REASONING_EFFORT", "").strip()
+            if reasoning_effort:
+                kwargs["reasoning_effort"] = reasoning_effort
+            flux_endpoint = os.getenv("AZURE_AI_FOUNDRY_FLUX_ENDPOINT", "").strip()
+            if flux_endpoint:
+                kwargs["flux_endpoint"] = flux_endpoint
+            flux_api_version = os.getenv("AZURE_AI_FOUNDRY_FLUX_API_VERSION", "").strip()
+            if flux_api_version:
+                kwargs["flux_api_version"] = flux_api_version
 
         return ProviderRegistry.get_provider(provider_name, api_key=api_key, **kwargs)
 
@@ -246,6 +350,17 @@ class AIProviderService:
         config = ProviderConfig.objects.filter(owner=self.user, is_active=True).first()
         if config:
             return config.provider_name
+
+        configured_provider = normalize_provider_name(os.getenv("API_PROVIDER", ""))
+        if configured_provider:
+            if configured_provider not in _ENV_PREFIX_MAP:
+                raise ProviderNotFoundError(configured_provider)
+            if _has_provider_api_key(configured_provider):
+                return configured_provider
+
+        default_provider = get_available_default_provider_name_from_env()
+        if _has_provider_api_key(default_provider):
+            return default_provider
 
         # Fallback：尋找第一個有 API key 的 ENV 供應商
         for name, prefix in _ENV_PREFIX_MAP.items():

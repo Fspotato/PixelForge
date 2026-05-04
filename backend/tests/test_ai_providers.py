@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 from dataclasses import fields as dataclass_fields
+from types import SimpleNamespace
 
 import pytest
 
@@ -14,6 +15,8 @@ from core.ai_providers.exceptions import (
     ProviderAPIError,
     ProviderNotFoundError,
 )
+from core.ai_providers.providers import azure_openai_provider as azure_provider_module
+from core.ai_providers.providers.azure_openai_provider import AzureOpenAIProvider
 from core.ai_providers.registry import ProviderRegistry
 from core.ai_providers.schemas import (
     ChatMessage,
@@ -21,6 +24,7 @@ from core.ai_providers.schemas import (
     ChatResponse,
     ChatStreamChunk,
     EmbeddingResponse,
+    ImageGenerateRequest,
     MessageRole,
     UsageInfo,
 )
@@ -237,6 +241,315 @@ class TestProviderRegistryGetNotFound:
 
         assert exc_info.value.code == "AI_PROVIDER_NOT_FOUND"
         assert exc_info.value.status_code == 404
+
+
+class TestAzureOpenAIProviderCompatibility:
+    def test_gpt5_deployment_uses_responses_api_without_chat_only_params(self):
+        """GPT-5 系列 Azure 部署應走 Responses API，避免 unsupported operation 400。"""
+        provider = AzureOpenAIProvider(
+            api_key="test-key",
+            azure_endpoint="https://example.openai.azure.com/",
+            api_version="2025-04-01-preview",
+        )
+        calls = []
+        provider.client = SimpleNamespace(
+            responses=SimpleNamespace(
+                create=lambda **kwargs: (
+                    calls.append(kwargs)
+                    or SimpleNamespace(
+                        output_text='{"ok": true}',
+                        status="completed",
+                        usage=SimpleNamespace(
+                            input_tokens=7,
+                            output_tokens=5,
+                            total_tokens=12,
+                        ),
+                    )
+                )
+            )
+        )
+        request = ChatRequest(
+            messages=[
+                ChatMessage(role=MessageRole.SYSTEM, content="只回傳 JSON"),
+                ChatMessage(role=MessageRole.USER, content="規劃一個像素劍"),
+            ],
+            model="gpt-5.4-pro-1",
+            temperature=0.2,
+            max_tokens=420,
+        )
+
+        response = provider.chat(request)
+
+        assert response.content == '{"ok": true}'
+        assert response.usage.total_tokens == 12
+        assert calls == [
+            {
+                "model": "gpt-5.4-pro-1",
+                "input": [{"role": "user", "content": "規劃一個像素劍"}],
+                "instructions": "只回傳 JSON",
+                "max_output_tokens": 420,
+                "reasoning": {"effort": "medium"},
+            }
+        ]
+
+    def test_responses_api_retries_when_reasoning_effort_is_unsupported(self, monkeypatch):
+        """Azure 回報 reasoning.effort 不支援時，應改用模型支援的值重試。"""
+        monkeypatch.setattr(
+            AzureOpenAIProvider,
+            "_is_bad_request_error",
+            staticmethod(lambda _exc: True),
+        )
+        provider = AzureOpenAIProvider(
+            api_key="test-key",
+            azure_endpoint="https://example.openai.azure.com/",
+            api_version="2025-04-01-preview",
+            reasoning_effort="minimal",
+        )
+        calls = []
+
+        def fake_create(**kwargs):
+            calls.append(kwargs)
+            if len(calls) == 1:
+                raise RuntimeError(
+                    "Unsupported value: 'minimal' is not supported with the "
+                    "'gpt-5.4-pro-2026-03-05' model. Supported values are: "
+                    "'medium', 'high', and 'xhigh'."
+                )
+            return SimpleNamespace(
+                output_text='{"ok": true}',
+                status="completed",
+                usage=SimpleNamespace(input_tokens=7, output_tokens=5, total_tokens=12),
+            )
+
+        provider.client = SimpleNamespace(responses=SimpleNamespace(create=fake_create))
+
+        response = provider.chat(
+            ChatRequest(
+                messages=[ChatMessage(role=MessageRole.USER, content="hello")],
+                model="gpt-5.4-pro-1",
+                max_tokens=100,
+            )
+        )
+
+        assert response.content == '{"ok": true}'
+        assert calls[0]["reasoning"] == {"effort": "minimal"}
+        assert calls[1]["reasoning"] == {"effort": "medium"}
+
+    def test_chat_completion_kwargs_omit_none_and_use_reasoning_safe_params(self):
+        """Azure Chat Completions 參數應避免傳入 None 或 reasoning 不支援的欄位。"""
+        provider = AzureOpenAIProvider(
+            api_key="test-key",
+            azure_endpoint="https://example.openai.azure.com/",
+            api_version="2025-04-01-preview",
+        )
+        request = ChatRequest(
+            messages=[ChatMessage(role=MessageRole.USER, content="hello")],
+            model="o3-mini",
+            temperature=0.2,
+            max_tokens=256,
+        )
+
+        kwargs = provider._chat_completion_kwargs(request)
+
+        assert kwargs == {
+            "model": "o3-mini",
+            "messages": [{"role": "user", "content": "hello"}],
+            "max_completion_tokens": 256,
+        }
+
+    def test_image_generation_retries_without_unsupported_response_format(self, monkeypatch):
+        """Azure 圖像模型拒絕 response_format 時，應移除該參數後重試一次。"""
+        monkeypatch.setattr(azure_provider_module, "BadRequestError", RuntimeError)
+        provider = AzureOpenAIProvider(
+            api_key="test-key",
+            azure_endpoint="https://example.openai.azure.com/",
+            api_version="2025-04-01-preview",
+            image_response_format="b64_json",
+        )
+        calls = []
+
+        def fake_generate(**kwargs):
+            calls.append(kwargs)
+            if len(calls) == 1:
+                raise RuntimeError("response_format is unsupported")
+            return SimpleNamespace(data=[SimpleNamespace(url="https://example.test/image.png")])
+
+        provider.client = SimpleNamespace(images=SimpleNamespace(generate=fake_generate))
+
+        response = provider.generate_image(
+            ImageGenerateRequest(prompt="pixel sword", model="gpt-image-2", n=1)
+        )
+
+        assert response.images == [{"url": "https://example.test/image.png"}]
+        assert calls == [
+            {
+                "model": "gpt-image-2",
+                "prompt": "pixel sword",
+                "n": 1,
+                "size": "1024x1024",
+                "response_format": "b64_json",
+            },
+            {
+                "model": "gpt-image-2",
+                "prompt": "pixel sword",
+                "n": 1,
+                "size": "1024x1024",
+            },
+        ]
+
+    def test_image_generation_omits_response_format_by_default(self):
+        """Azure 圖像模型預設不傳 response_format，避免 gpt-image-2 回傳 400。"""
+        provider = AzureOpenAIProvider(
+            api_key="test-key",
+            azure_endpoint="https://example.openai.azure.com/",
+            api_version="2025-04-01-preview",
+        )
+        calls = []
+
+        def fake_generate(**kwargs):
+            calls.append(kwargs)
+            return SimpleNamespace(data=[SimpleNamespace(b64_json="encoded-image")])
+
+        provider.client = SimpleNamespace(images=SimpleNamespace(generate=fake_generate))
+
+        response = provider.generate_image(
+            ImageGenerateRequest(prompt="pixel sword", model="gpt-image-2", n=1)
+        )
+
+        assert response.images == [{"b64_json": "encoded-image"}]
+        assert calls == [
+            {
+                "model": "gpt-image-2",
+                "prompt": "pixel sword",
+                "n": 1,
+                "size": "1024x1024",
+            }
+        ]
+
+    def test_flux_image_generation_uses_azure_ai_foundry_endpoint(self, monkeypatch):
+        """FLUX.2-pro 應走 Azure AI Foundry endpoint 並解析 b64_json 回應。"""
+        calls = []
+
+        class FakeResponse:
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return {"data": [{"b64_json": "encoded-flux-image"}]}
+
+        class FakeClient:
+            def __init__(self, timeout):
+                self.timeout = timeout
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def post(self, url, *, params, headers, json):
+                calls.append(
+                    {
+                        "url": url,
+                        "params": params,
+                        "headers": headers,
+                        "json": json,
+                        "timeout": self.timeout,
+                    }
+                )
+                return FakeResponse()
+
+        monkeypatch.setattr(azure_provider_module.httpx, "Client", FakeClient)
+        provider = AzureOpenAIProvider(
+            api_key="test-key",
+            azure_endpoint="https://example.openai.azure.com/",
+            api_version="2025-04-01-preview",
+            flux_endpoint="https://example.services.ai.azure.com/providers/blackforestlabs/v1/flux-2-pro",
+            flux_api_version="preview",
+        )
+
+        response = provider.generate_image(
+            ImageGenerateRequest(prompt="pixel sword", model="FLUX.2-pro", n=1)
+        )
+
+        assert response.images == [{"b64_json": "encoded-flux-image"}]
+        assert calls == [
+            {
+                "url": "https://example.services.ai.azure.com/providers/blackforestlabs/v1/flux-2-pro",
+                "params": {"api-version": "preview"},
+                "headers": {
+                    "Authorization": "Bearer test-key",
+                    "api-key": "test-key",
+                    "Content-Type": "application/json",
+                },
+                "json": {
+                    "model": "FLUX.2-pro",
+                    "prompt": "pixel sword",
+                    "width": 1024,
+                    "height": 1024,
+                    "num_images": 1,
+                    "output_format": "png",
+                },
+                "timeout": 180,
+            }
+        ]
+
+    def test_flux_image_generation_retries_with_official_bfl_host(self, monkeypatch):
+        """services host 失敗時，應改試官方 BFL provider host。"""
+        calls = []
+
+        class FakeResponse:
+            def __init__(self, status_code, body, url):
+                self.status_code = status_code
+                self._body = body
+                self.text = body
+                self.request = SimpleNamespace(url=url)
+
+            def raise_for_status(self):
+                if self.status_code >= 400:
+                    raise azure_provider_module.httpx.HTTPStatusError(
+                        "bad request",
+                        request=self.request,
+                        response=self,
+                    )
+
+            def json(self):
+                return {"data": [{"b64_json": "retried-image"}]}
+
+        class FakeClient:
+            def __init__(self, timeout):
+                self.timeout = timeout
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def post(self, url, *, params, headers, json):
+                calls.append(url)
+                if "services.ai.azure.com" in url:
+                    return FakeResponse(400, '{"error":"bad payload"}', url)
+                return FakeResponse(200, "{}", url)
+
+        monkeypatch.setattr(azure_provider_module.httpx, "Client", FakeClient)
+        provider = AzureOpenAIProvider(
+            api_key="test-key",
+            azure_endpoint="https://example.openai.azure.com/",
+            api_version="2025-04-01-preview",
+            flux_endpoint="https://example.services.ai.azure.com/providers/blackforestlabs/v1/flux-2-pro",
+            flux_api_version="preview",
+        )
+
+        response = provider.generate_image(
+            ImageGenerateRequest(prompt="pixel sword", model="FLUX.2-pro", n=1)
+        )
+
+        assert response.images == [{"b64_json": "retried-image"}]
+        assert calls == [
+            "https://example.services.ai.azure.com/providers/blackforestlabs/v1/flux-2-pro",
+            "https://example.cognitiveservices.azure.com/providers/blackforestlabs/v1/flux-2-pro",
+        ]
 
 
 # --- 7. ProviderNotFoundError 屬性 ---

@@ -4,18 +4,20 @@ from __future__ import annotations
 
 import base64
 import io
+import json
 from uuid import UUID
 
 import httpx
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.db import transaction
+from django.db.models import Case, IntegerField, Value, When
 from django.utils import timezone
 from PIL import Image
 
 from core._common import NotFoundError, PermissionDeniedError, ValidationError
 from core._event_bus import publish_event
 from core.ai_providers.schemas import ImageGenerateRequest
-from core.ai_providers.services import AIProviderService
+from core.ai_providers.services import AIProviderService, get_env_default_model
 from core.file_storage.services import FileStorageService
 from modules._forge_shared.enums import ForgeJobStatus
 from modules._forge_shared.events import (
@@ -35,6 +37,20 @@ from .models import GenerationJob
 
 class GenerationJobService:
     """生成任務服務。"""
+
+    LIVE_STATUSES = {
+        ForgeJobStatus.QUEUED,
+        ForgeJobStatus.PLANNING,
+        ForgeJobStatus.GENERATING,
+        ForgeJobStatus.PROCESSING,
+    }
+    LIVE_LIST_STATUSES = (
+        ForgeJobStatus.PROCESSING,
+        ForgeJobStatus.GENERATING,
+        ForgeJobStatus.PLANNING,
+        ForgeJobStatus.QUEUED,
+        ForgeJobStatus.FAILED,
+    )
 
     @classmethod
     def create_job(
@@ -57,7 +73,7 @@ class GenerationJobService:
             raise PermissionDeniedError("停用使用者不可建立生成任務")
 
         normalized_processors = cls._resolve_processors(preset, processors)
-        resolved_model = model or preset.model_params.get("model", "qwen-image-plus")
+        resolved_model = model or get_env_default_model(provider_name or None, "image")
         resolved_config = cls._merge_template_processor_config(preset, processor_config or {})
         template_version = (preset.model_params or {}).get("template_version", 0)
 
@@ -143,6 +159,77 @@ class GenerationJobService:
         return job
 
     @classmethod
+    def list_user_history(cls, *, user):
+        """列出歷史任務（不包含進行中任務）。"""
+        return (
+            GenerationJob.objects.filter(user=user)
+            .exclude(status__in=cls.LIVE_STATUSES)
+            .select_related("preset")
+            .order_by("-created_at")
+        )
+
+    @classmethod
+    def list_live_jobs(cls, *, user):
+        """列出即時任務與待處理失敗任務。"""
+        status_order = Case(
+            *[
+                When(status=status, then=Value(index))
+                for index, status in enumerate(cls.LIVE_LIST_STATUSES)
+            ],
+            default=Value(len(cls.LIVE_LIST_STATUSES)),
+            output_field=IntegerField(),
+        )
+        return (
+            GenerationJob.objects.filter(user=user, status__in=cls.LIVE_LIST_STATUSES)
+            .select_related("preset")
+            .annotate(live_sort_order=status_order)
+            .order_by("live_sort_order", "-updated_at", "-created_at")
+        )
+
+    @classmethod
+    @transaction.atomic
+    def delete_history_job(cls, *, user, job_id: str | UUID) -> None:
+        """刪除歷史任務，並一併刪除關聯資產與檔案。"""
+        job = cls.get_user_job(user=user, job_id=job_id)
+        if job.status in cls.LIVE_STATUSES:
+            raise ValidationError(f"狀態為 {job.status} 的任務不可從歷史中刪除")
+
+        from modules.asset_library.models import Asset
+        from modules.asset_library.services import AssetLibraryService
+
+        asset = Asset.objects.filter(user=user, generation_job_id=job.id).first()
+        asset_file_ids = set()
+        if asset:
+            asset_file_ids = {
+                str(record.id)
+                for record in [
+                    asset.original_file,
+                    asset.processed_file,
+                    asset.thumbnail_file,
+                    asset.metadata_file,
+                ]
+                if record
+            }
+        if asset:
+            AssetLibraryService.delete_asset(user, asset.id)
+            asset.hard_delete()
+
+        job_file_ids = {
+            str(record.id)
+            for record in [
+                job.original_file,
+                job.processed_file,
+                job.thumbnail_file,
+                job.metadata_file,
+            ]
+            if record
+        }
+        for file_id in job_file_ids - asset_file_ids:
+            FileStorageService.delete_file(file_id, user)
+
+        job.hard_delete()
+
+    @classmethod
     def update_progress(
         cls, job: GenerationJob, status: str, percent: int, message: str = ""
     ) -> None:
@@ -166,20 +253,21 @@ class GenerationJobService:
         job = GenerationJob.objects.select_related("user", "preset").get(id=job_id)
         try:
             cls._ensure_prompt_plan(job)
-            cls.update_progress(job, ForgeJobStatus.GENERATING, 20, "正在呼叫圖像生成服務")
+            cls.update_progress(job, ForgeJobStatus.GENERATING, 30, "正在生成圖片")
             image_candidates = cls._generate_image_candidates(job)
+            cls.update_progress(job, ForgeJobStatus.PROCESSING, 70, "正在處理圖片")
             selected = cls._select_best_candidate(job, image_candidates)
             image_bytes = selected["original_bytes"]
             original_file = cls._upload_bytes(
                 job=job,
-                filename="original.png",
+                filename="origin.png",
                 content=image_bytes,
                 related_object_type="generation_jobs.job",
             )
             job.original_file = original_file
             job.save(update_fields=["original_file", "updated_at"])
 
-            cls.update_progress(job, ForgeJobStatus.PROCESSING, 70, "正在保存最佳候選")
+            cls.update_progress(job, ForgeJobStatus.PROCESSING, 70, "正在處理圖片")
             result = selected["pipeline_result"]
             config = selected["processor_config"]
             processed_bytes = selected["processed_bytes"]
@@ -197,7 +285,9 @@ class GenerationJobService:
                 related_object_type="generation_jobs.job",
             )
 
+            archived_at = timezone.now()
             metadata = {
+                "schema_version": 1,
                 "id": str(job.id),
                 "subject": job.subject,
                 "prompt": job.prompt,
@@ -221,16 +311,59 @@ class GenerationJobService:
                 "selected_candidate_qc": selected["evaluation"],
                 "status": ForgeJobStatus.ARCHIVED,
                 "created_at": job.created_at.isoformat(),
-                "archived_at": timezone.now().isoformat(),
+                "archived_at": archived_at.isoformat(),
+                "job": {
+                    "id": str(job.id),
+                    "subject": job.subject,
+                    "status": ForgeJobStatus.ARCHIVED,
+                    "created_at": job.created_at.isoformat(),
+                    "archived_at": archived_at.isoformat(),
+                },
+                "style_preset": {
+                    "id": str(job.preset_id),
+                    "key": job.preset.key,
+                    "version": job.metadata.get("template_version"),
+                    "name": job.preset.name,
+                },
+                "model_info": {
+                    "provider": job.provider_name,
+                    "image_model": job.model,
+                },
+                "generation": {
+                    "view": job.view,
+                    "mode": job.mode,
+                    "candidate_count": len(image_candidates),
+                    "selected_candidate_index": selected["index"],
+                },
+                "quality": {
+                    "qc_pass": selected["evaluation"].get("qc_pass"),
+                    "score": selected["evaluation"].get("score"),
+                    "metrics": selected["style_metrics"],
+                },
+                "agent_rework": selected.get("agent_rework"),
+                "files": {
+                    "origin": "origin.png",
+                    "processed": "processed.png",
+                    "thumbnail": "thumbnail.png",
+                    "metadata": "metadata.json",
+                },
             }
+            metadata_file = cls._upload_bytes(
+                job=job,
+                filename="metadata.json",
+                content=json.dumps(metadata, ensure_ascii=False, indent=2).encode("utf-8"),
+                content_type="application/json",
+                related_object_type="generation_jobs.job",
+            )
 
             job.status = ForgeJobStatus.ARCHIVED
             job.percent = 100
             job.pipeline_warnings = result.warnings
             job.processed_file = processed_file
             job.thumbnail_file = thumbnail_file
+            job.metadata_file = metadata_file
             job.metadata = metadata
-            job.archived_at = timezone.now()
+            job.archived_at = archived_at
             job.error = ""
             job.save()
 
@@ -242,6 +375,7 @@ class GenerationJobService:
                     "original_file_id": str(original_file.id),
                     "processed_file_id": str(processed_file.id),
                     "thumbnail_file_id": str(thumbnail_file.id),
+                    "metadata_file_id": str(metadata_file.id),
                     "metadata": metadata,
                 },
             )
@@ -270,8 +404,8 @@ class GenerationJobService:
         GenerationJobService.update_progress(
             job,
             ForgeJobStatus.PLANNING,
-            5,
-            "正在使用 LLM 規劃精簡提示詞",
+            10,
+            "正在生成風格化 Prompt",
         )
         prompt_result = build_prompt(
             subject=job.subject,
@@ -293,37 +427,32 @@ class GenerationJobService:
         job.prompt = prompt_result.prompt
         job.negative_prompt = ""
         job.metadata = metadata
-        job.percent = 15
+        job.percent = 10
         job.save(update_fields=["prompt", "negative_prompt", "metadata", "percent", "updated_at"])
 
     @staticmethod
     def _generate_image_bytes(job: GenerationJob) -> bytes:
-        return GenerationJobService._generate_image_candidates(job, count=1)[0]
+        return GenerationJobService._generate_image_candidates(job)[0]
 
     @staticmethod
-    def _generate_image_candidates(job: GenerationJob, count: int | None = None) -> list[bytes]:
-        candidate_count = count or GenerationJobService._candidate_count_for_job(job)
-        candidates: list[bytes] = []
+    def _generate_image_candidates(job: GenerationJob) -> list[bytes]:
         service = AIProviderService(job.user)
-        for _ in range(candidate_count):
-            request = ImageGenerateRequest(
-                prompt=job.prompt,
-                model=job.model,
-                n=1,
-                size=job.preset.model_params.get("size", "1024x1024"),
-            )
-            response = service.generate_image(
-                request,
-                provider_name=job.provider_name or None,
-            )
-            candidates.extend(
-                GenerationJobService._image_payload_to_bytes(image) for image in response.images
-            )
-            if len(candidates) >= candidate_count:
-                break
+        request = ImageGenerateRequest(
+            prompt=job.prompt,
+            model=job.model,
+            n=1,
+            size=job.preset.model_params.get("size", "1024x1024"),
+        )
+        response = service.generate_image(
+            request,
+            provider_name=job.provider_name or None,
+        )
+        candidates = [
+            GenerationJobService._image_payload_to_bytes(image) for image in response.images[:1]
+        ]
         if not candidates:
             raise ValidationError("AI 圖像生成未回傳圖片")
-        return candidates[:candidate_count]
+        return candidates
 
     @staticmethod
     def _image_payload_to_bytes(image: dict) -> bytes:
@@ -337,24 +466,12 @@ class GenerationJobService:
         raise ValidationError("AI 圖像格式不支援")
 
     @staticmethod
-    def _candidate_count_for_job(job: GenerationJob) -> int:
-        plan_count = (job.metadata or {}).get("prompt_plan", {}).get("candidate_count")
-        preset_count = (job.preset.model_params or {}).get("candidate_count", 3)
-        value = plan_count or preset_count
-        try:
-            count = int(value)
-        except (TypeError, ValueError):
-            count = 3
-        return max(2, min(4, count))
-
-    @staticmethod
     def _select_best_candidate(job: GenerationJob, image_candidates: list[bytes]) -> dict:
         cls = GenerationJobService
         if not image_candidates:
             raise ValidationError("AI 圖像生成未回傳圖片")
 
-        cls.update_progress(job, ForgeJobStatus.PROCESSING, 40, "正在評估候選圖")
-        config = cls._merge_palette_config(job)
+        base_config = cls._merge_palette_config(job)
         palette_hex = cls._palette_for_job(job)
         prompt_plan = (job.metadata or {}).get("prompt_plan", {})
         evaluations: list[dict] = []
@@ -362,6 +479,7 @@ class GenerationJobService:
 
         for index, candidate_bytes in enumerate(image_candidates):
             source_image = Image.open(io.BytesIO(candidate_bytes)).convert("RGBA")
+            config = {name: dict(value) for name, value in base_config.items()}
             qc_image = cls._build_qc_image(job, source_image, config)
             pipeline = ImagePipeline(job.processors)
             result = pipeline.run(source_image, processor_config=config, continue_on_error=True)
@@ -379,6 +497,28 @@ class GenerationJobService:
                 "pipeline_warnings": result.warnings,
                 "style_consistency": style_metrics,
             }
+            agent_rework = cls._agent_rework_if_needed(
+                job=job,
+                source_image=source_image,
+                current_result=result,
+                processor_config=config,
+            )
+            if agent_rework:
+                result = agent_rework["pipeline_result"]
+                config = agent_rework["processor_config"]
+                processed_bytes = cls._image_to_png(result.image)
+                thumbnail_image = result.thumbnail or cls._build_thumbnail(result.image)
+                style_metrics = analyze_style_consistency(result.image, palette_hex)
+                qc_image = cls._build_qc_image(job, source_image, config)
+                evaluation = evaluate_candidate(
+                    image=qc_image,
+                    prompt_plan=prompt_plan,
+                    style_metrics=style_metrics,
+                )
+                record["agent_rework"] = agent_rework["metadata"]
+                record["qc"] = evaluation
+                record["pipeline_warnings"] = result.warnings
+                record["style_consistency"] = style_metrics
             evaluations.append(record)
             candidate = {
                 "index": index,
@@ -390,6 +530,7 @@ class GenerationJobService:
                 "style_metrics": style_metrics,
                 "evaluation": evaluation,
                 "candidate_evaluations": evaluations,
+                "agent_rework": agent_rework["metadata"] if agent_rework else None,
             }
             if best is None or cls._candidate_rank(candidate) > cls._candidate_rank(best):
                 best = candidate
@@ -416,14 +557,107 @@ class GenerationJobService:
         return result.image
 
     @staticmethod
+    def _agent_rework_if_needed(
+        *,
+        job: GenerationJob,
+        source_image: Image.Image,
+        current_result,
+        processor_config: dict,
+    ) -> dict | None:
+        if not (job.metadata or {}).get("agent_generation"):
+            return None
+        if "bg_remover" not in job.processors:
+            return None
+
+        initial_scan = GenerationJobService._scan_processed_subject(current_result.image)
+        if not initial_scan["needs_rework"]:
+            return None
+
+        attempts = [
+            ("flood_fill", {"method": "flood_fill", "tolerance": 8, "corner_threshold": 1}),
+            ("subject", {"method": "subject", "tolerance": 10, "min_foreground_ratio": 0.01}),
+        ]
+        best_result = None
+        best_config = None
+        best_scan = initial_scan
+        for method, bg_config in attempts:
+            candidate_config = {name: dict(value) for name, value in processor_config.items()}
+            candidate_bg_config = dict(candidate_config.get("bg_remover", {}))
+            candidate_bg_config.update(bg_config)
+            candidate_config["bg_remover"] = candidate_bg_config
+            result = ImagePipeline(job.processors).run(
+                source_image,
+                processor_config=candidate_config,
+                continue_on_error=True,
+            )
+            scan = GenerationJobService._scan_processed_subject(result.image)
+            if scan["foreground_ratio"] > best_scan["foreground_ratio"]:
+                best_result = result
+                best_config = candidate_config
+                best_scan = scan | {"method": method}
+            if not scan["needs_rework"]:
+                return {
+                    "pipeline_result": result,
+                    "processor_config": candidate_config,
+                    "metadata": {
+                        "triggered": True,
+                        "reason": initial_scan["reason"],
+                        "method": method,
+                        "before": initial_scan,
+                        "after": scan,
+                    },
+                }
+
+        if best_result is not None and best_config is not None:
+            return {
+                "pipeline_result": best_result,
+                "processor_config": best_config,
+                "metadata": {
+                    "triggered": True,
+                    "reason": initial_scan["reason"],
+                    "method": best_scan.get("method", "fallback"),
+                    "before": initial_scan,
+                    "after": best_scan,
+                    "still_risky": best_scan["needs_rework"],
+                },
+            }
+        raise ValidationError("Agent 返工掃描發現處理後主體可能遺失")
+
+    @staticmethod
+    def _scan_processed_subject(image: Image.Image) -> dict:
+        alpha = image.convert("RGBA").getchannel("A")
+        width, height = image.size
+        total_pixels = max(width * height, 1)
+        histogram = alpha.histogram()
+        visible_pixels = total_pixels - histogram[0]
+        foreground_ratio = visible_pixels / total_pixels
+        bbox = alpha.getbbox()
+        reason = ""
+        needs_rework = False
+        if bbox is None or visible_pixels == 0:
+            needs_rework = True
+            reason = "processed_subject_empty"
+        elif foreground_ratio < 0.012:
+            needs_rework = True
+            reason = "processed_subject_too_small"
+        return {
+            "needs_rework": needs_rework,
+            "reason": reason,
+            "foreground_ratio": round(foreground_ratio, 6),
+            "bbox": list(bbox) if bbox else None,
+        }
+
+    @staticmethod
     def _upload_bytes(
         *,
         job: GenerationJob,
         filename: str,
         content: bytes,
+        content_type: str = "image/png",
         related_object_type: str,
     ):
-        uploaded = SimpleUploadedFile(filename, content, content_type="image/png")
+        uploaded = SimpleUploadedFile(filename, content, content_type=content_type)
+        storage_path = f"{job.user_id}/pixelforge/jobs/{job.id}/{filename}"
         return FileStorageService.upload(
             job.user,
             uploaded,
@@ -432,6 +666,7 @@ class GenerationJobService:
             metadata={"generation_job_id": str(job.id), "filename": filename},
             related_object_type=related_object_type,
             related_object_id=str(job.id),
+            storage_path=storage_path,
         )
 
     @staticmethod

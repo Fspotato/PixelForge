@@ -81,7 +81,7 @@ def test_standard_response_formats():
     assert created_response.status_code == status.HTTP_201_CREATED
     assert created_response.data["message"] == "建立成功"
     assert no_content_response.status_code == status.HTTP_204_NO_CONTENT
-    assert no_content_response.data["status"] == "success"
+    assert no_content_response.data is None
     assert error_response.status_code == status.HTTP_400_BAD_REQUEST
     assert error_response.data == {
         "status": "error",

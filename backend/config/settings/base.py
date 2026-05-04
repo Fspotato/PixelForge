@@ -79,6 +79,7 @@ INSTALLED_APPS = [
     "modules.generation_jobs",
     "modules.asset_library",
     "modules.image_processing",
+    "modules.agent_generation",
     "modules.admin_operations",
 ]
 
@@ -118,7 +119,7 @@ ASGI_APPLICATION = "config.asgi.application"
 DATABASES = {
     "default": env.db(
         "DATABASE_URL",
-        default="postgresql://postgres:postgres@127.0.0.1:5432/ai_service_framework",
+        default="postgresql://postgres:postgres@127.0.0.1:5432/pixelforge",
     )
 }
 
@@ -182,8 +183,8 @@ REST_FRAMEWORK = {
 
 
 SPECTACULAR_SETTINGS = {
-    "TITLE": "AI Service Framework API",
-    "DESCRIPTION": "AI 服務框架 — 統一的 AI 供應商接入、認證、金流處理平台",
+    "TITLE": "PixelForge API",
+    "DESCRIPTION": "PixelForge — 像素遊戲資產生成平台與共用服務 API",
     "VERSION": "0.1.0",
     "SERVE_INCLUDE_SCHEMA": False,
     "SCHEMA_PATH_PREFIX": "/api/v1/",
@@ -208,8 +209,8 @@ SIMPLE_JWT = {
     "USER_ID_CLAIM": "user_id",
 }
 
-JWT_AUTH_COOKIE = env("JWT_AUTH_COOKIE", default="ai_service_framework_access")
-JWT_REFRESH_COOKIE = env("JWT_REFRESH_COOKIE", default="ai_service_framework_refresh")
+JWT_AUTH_COOKIE = env("JWT_AUTH_COOKIE", default="pixelforge_access")
+JWT_REFRESH_COOKIE = env("JWT_REFRESH_COOKIE", default="pixelforge_refresh")
 JWT_COOKIE_SECURE = env.bool("JWT_COOKIE_SECURE", default=not DEBUG)
 JWT_COOKIE_SAMESITE = env("JWT_COOKIE_SAMESITE", default="Lax")
 JWT_COOKIE_PATH = env("JWT_COOKIE_PATH", default="/api/")

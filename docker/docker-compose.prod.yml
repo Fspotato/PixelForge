@@ -3,7 +3,7 @@ services:
     build:
       context: ..
       dockerfile: docker/Dockerfile.prod
-    container_name: ai-service-framework-prod-web
+    container_name: pixelforge-prod-web
     env_file:
       - ../backend/env/.env.prod
     environment:
@@ -33,7 +33,7 @@ services:
     build:
       context: ..
       dockerfile: docker/Dockerfile.prod
-    container_name: ai-service-framework-prod-celery-worker
+    container_name: pixelforge-prod-celery-worker
     env_file:
       - ../backend/env/.env.prod
     environment:
@@ -53,7 +53,7 @@ services:
     build:
       context: ..
       dockerfile: docker/Dockerfile.prod
-    container_name: ai-service-framework-prod-celery-beat
+    container_name: pixelforge-prod-celery-beat
     env_file:
       - ../backend/env/.env.prod
     environment:
@@ -72,7 +72,7 @@ services:
 
   postgres:
     image: pgvector/pgvector:pg17
-    container_name: ai-service-framework-prod-postgres
+    container_name: pixelforge-prod-postgres
     hostname: prod-postgres
     env_file:
       - ../backend/env/.env.prod
@@ -89,7 +89,7 @@ services:
 
   redis:
     image: redis:8-alpine
-    container_name: ai-service-framework-prod-redis
+    container_name: pixelforge-prod-redis
     hostname: prod-redis
     ports:
       - "6381:6379"

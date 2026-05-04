@@ -1,6 +1,6 @@
 """PixelForge 共用常數。"""
 
-DEFAULT_PROCESSORS = ["bg_remover", "alpha_trimmer", "perfect_pixel", "palette_mapper", "thumbnail"]
+DEFAULT_PROCESSORS = ["bg_remover", "perfect_pixel", "upscaler"]
 SELECTABLE_PROCESSORS = [
     "bg_remover",
     "alpha_trimmer",

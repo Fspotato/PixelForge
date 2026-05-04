@@ -75,6 +75,13 @@ class GenerationJob(BaseModel):
         blank=True,
         related_name="generation_thumbnail_jobs",
     )
+    metadata_file = models.ForeignKey(
+        "file_storage.FileRecord",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="generation_metadata_jobs",
+    )
     metadata = models.JSONField(default=dict, blank=True, verbose_name="Metadata")
     archived_at = models.DateTimeField(null=True, blank=True, verbose_name="封存時間")
 

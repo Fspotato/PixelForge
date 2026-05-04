@@ -1,4 +1,4 @@
-# AI Service Framework — 認證模組設計 (`auth`)
+# PixelForge 平台 — 認證模組設計 (`auth`)
 
 > 🌐 **外部模組**：暴露 REST API，處理所有認證相關流程。
 

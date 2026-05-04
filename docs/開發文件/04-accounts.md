@@ -1,4 +1,4 @@
-# AI Service Framework — 帳號模組設計 (`accounts`)
+# PixelForge 平台 — 帳號模組設計 (`accounts`)
 
 > 🌐 **外部模組**：暴露 REST API，管理使用者帳號與個人資料。
 

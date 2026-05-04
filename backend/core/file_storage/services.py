@@ -74,6 +74,7 @@ class FileStorageService:
         backend_name: str = "local",
         related_object_type: str = "",
         related_object_id: str = "",
+        storage_path: str = "",
     ) -> FileRecord:
         """上傳檔案。
 
@@ -98,7 +99,8 @@ class FileStorageService:
         cls._validate_file(filename, content_type, size)
         cls._check_quota(user, size)
 
-        storage_path = PathGenerator.generate(str(user.id), folder, filename)
+        storage_path = storage_path or PathGenerator.generate(str(user.id), folder, filename)
+        cls._validate_storage_path(storage_path)
         backend = StorageBackendRegistry.get_backend(backend_name)
         result = backend.upload(file_obj, storage_path, content_type)
 
@@ -344,6 +346,14 @@ class FileStorageService:
                 f"檔案大小超過上限（{cls.MAX_FILE_SIZE // 1048576}MB）",
                 details={"max_size": cls.MAX_FILE_SIZE, "actual_size": size},
             )
+
+    @staticmethod
+    def _validate_storage_path(storage_path: str) -> None:
+        """驗證自訂儲存路徑不會跳脫媒體根目錄。"""
+        normalized = storage_path.replace("\\", "/")
+        parts = [part for part in normalized.split("/") if part]
+        if normalized.startswith("/") or ".." in parts:
+            raise ValidationError("儲存路徑不合法")
 
     @classmethod
     def _check_quota(cls, user, size_bytes: int) -> None:
