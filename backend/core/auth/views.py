@@ -77,7 +77,7 @@ class LoginView(APIView):
         backend = EmailBackend()
         user = backend.authenticate(
             request,
-            email=serializer.validated_data["email"],
+            identifier=serializer.validated_data["identifier"],
             password=serializer.validated_data["password"],
         )
         if user is None:

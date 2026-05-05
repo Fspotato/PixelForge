@@ -11,13 +11,14 @@ from uuid import UUID
 from zipfile import ZIP_DEFLATED, ZipFile
 
 from django.db import IntegrityError, transaction
+from django.db.models import Max
 from django.utils import timezone
 from django.utils.text import slugify
 
 from core._common import NotFoundError, PermissionDeniedError, ValidationError
 from core.ai_providers.schemas import ChatMessage, ChatRequest, MessageRole
 from core.ai_providers.services import AIProviderService, get_env_default_model
-from modules._forge_shared.constants import DEFAULT_PROCESSORS, SUPPORTED_VIEWS
+from modules._forge_shared.constants import SUPPORTED_VIEWS
 from modules._forge_shared.enums import ForgeJobStatus
 from modules.asset_library.services import AssetLibraryService
 from modules.generation_jobs.models import GenerationJob
@@ -45,12 +46,7 @@ class AgentGenerationService:
         AgentItemStatus.FAILED,
         AgentItemStatus.CANCELED,
     }
-    _TERMINAL_SESSION_STATUSES = {
-        AgentSessionStatus.COMPLETED,
-        AgentSessionStatus.PARTIAL,
-        AgentSessionStatus.FAILED,
-        AgentSessionStatus.CANCELED,
-    }
+    _TERMINAL_SESSION_STATUSES = {AgentSessionStatus.CANCELED}
     _DEFAULT_PALETTE = [
         "#1A1C2C",
         "#5D275D",
@@ -67,6 +63,12 @@ class AgentGenerationService:
         "upscaler": {"scale": 10},
     }
     _PROCESSING_STALE_AFTER = timedelta(minutes=10)
+    _DIRECT_ACTIONS = {
+        "refresh_completed_assets",
+        "list_completed_assets",
+        "download_assets",
+        "retry_failed_items",
+    }
 
     @classmethod
     def create_session(cls, *, user, data: dict[str, Any]) -> AgentGenerationSession:
@@ -118,24 +120,27 @@ class AgentGenerationService:
 
         session = cls.get_user_session(user=user, session_id=session_id)
         content = cls._compact(message, 4000)
+        quick_action = cls._quick_user_action(content, session)
         now = timezone.now()
         with transaction.atomic():
             locked = AgentGenerationSession.objects.select_for_update().get(id=session.id)
             if locked.status == AgentSessionStatus.GENERATING:
                 raise ValidationError("素材生成中，請等待完成或取消後再送新需求")
+            if locked.status == AgentSessionStatus.CANCELED:
+                raise ValidationError("已取消的 Agent Session 無法新增訊息")
             update_fields = {"latest_chat_at", "updated_at"}
             locked.latest_chat_at = now
-            if locked.status not in cls._TERMINAL_SESSION_STATUSES:
-                locked.status = AgentSessionStatus.PLANNING
-                update_fields.add("status")
+            locked.status = AgentSessionStatus.PLANNING
+            update_fields.add("status")
             if auto_generate is not None:
                 locked.auto_generate = auto_generate
                 update_fields.add("auto_generate")
-            if locked.status != AgentSessionStatus.GENERATING:
+            if locked.status != AgentSessionStatus.GENERATING and not quick_action:
                 locked.manifest = {}
                 locked.planning_steps = []
                 locked.error = ""
-                update_fields.update({"manifest", "planning_steps", "error"})
+                locked.completed_at = None
+                update_fields.update({"manifest", "planning_steps", "error", "completed_at"})
                 if not locked.started_at:
                     locked.items.filter(generation_job__isnull=True).delete()
             locked.save(update_fields=sorted(update_fields))
@@ -144,8 +149,7 @@ class AgentGenerationService:
                 content=content,
                 client_message_id=client_message_id,
             )
-        if session.status not in cls._TERMINAL_SESSION_STATUSES:
-            cls.enqueue_orchestration(session)
+        cls.enqueue_orchestration(session)
         return cls.get_user_session(user=user, session_id=session.id)
 
     @classmethod
@@ -207,6 +211,12 @@ class AgentGenerationService:
             return session
         if session.status in cls._TERMINAL_SESSION_STATUSES:
             raise ValidationError(f"目前狀態為 {session.status}，不可重新啟動")
+        if session.status in {
+            AgentSessionStatus.COMPLETED,
+            AgentSessionStatus.PARTIAL,
+            AgentSessionStatus.FAILED,
+        }:
+            raise ValidationError("請先在聊天中新增或調整需求，再啟動下一輪生成")
         if not cls._is_ready_context(session.context or {}):
             raise ValidationError("請先在聊天中補齊遊戲類型、視角與素材數量")
         return cls._start_generation(user=user, session=session, approval_skipped=approval_skipped)
@@ -267,7 +277,11 @@ class AgentGenerationService:
     def cancel_session(cls, *, user, session_id: str | UUID) -> AgentGenerationSession:
         """取消尚未完成的 Agent Session。"""
         session = cls.get_user_session(user=user, session_id=session_id)
-        if session.status in cls._TERMINAL_SESSION_STATUSES:
+        if session.status in cls._TERMINAL_SESSION_STATUSES | {
+            AgentSessionStatus.COMPLETED,
+            AgentSessionStatus.PARTIAL,
+            AgentSessionStatus.FAILED,
+        }:
             raise ValidationError(f"目前狀態為 {session.status}，不可取消")
         task_ids = [task_id for task_id in [session.last_orchestration_task_id] if task_id]
         session.status = AgentSessionStatus.CANCELED
@@ -344,6 +358,8 @@ class AgentGenerationService:
             return
 
         changed_items: list[AgentGenerationItem] = []
+        completed_announcements: list[AgentGenerationItem] = []
+        auto_retry_candidates: list[tuple[UUID, str, int]] = []
         updated_at = timezone.now()
         for item in items:
             job = item.generation_job
@@ -353,9 +369,36 @@ class AgentGenerationService:
             metadata = dict(item.metadata or {})
             if job.result_asset_id:
                 metadata["asset_id"] = str(job.result_asset_id)
+                if (
+                    next_status == AgentItemStatus.ARCHIVED
+                    and not metadata.get("result_announced_at")
+                ):
+                    metadata["result_announced_at"] = updated_at.isoformat()
+                    completed_announcements.append(item)
             rework = (job.metadata or {}).get("agent_rework")
             if rework:
                 metadata["agent_rework"] = rework
+            retry_kind = (
+                cls._retriable_error_kind(job.error)
+                if next_status == AgentItemStatus.FAILED
+                else ""
+            )
+            if (
+                session.status == AgentSessionStatus.GENERATING
+                and retry_kind
+                and item.retry_count < session.max_retry_per_item
+            ):
+                next_status = AgentItemStatus.PLANNED
+                item.retry_count += 1
+                metadata["auto_retry"] = {
+                    "kind": retry_kind,
+                    "attempt": item.retry_count,
+                    "max_attempts": session.max_retry_per_item,
+                    "scheduled_at": updated_at.isoformat(),
+                }
+                auto_retry_candidates.append(
+                    (item.id, retry_kind, cls._auto_retry_delay_seconds(item.retry_count))
+                )
             if (
                 item.status != next_status
                 or item.last_error != job.error
@@ -370,8 +413,45 @@ class AgentGenerationService:
         if changed_items:
             AgentGenerationItem.objects.bulk_update(
                 changed_items,
-                ["status", "last_error", "metadata", "updated_at"],
+                ["status", "last_error", "metadata", "retry_count", "updated_at"],
             )
+
+        for item in completed_announcements:
+            if not (item.metadata or {}).get("asset_id"):
+                continue
+            cls._add_assistant_message(
+                session,
+                f"「{item.name}」已完成，可以在右側清單檢視圖片。",
+                cls._item_result_metadata(item),
+            )
+
+        if auto_retry_candidates:
+            session.status = AgentSessionStatus.GENERATING
+            session.completed_at = None
+            session.save(update_fields=["status", "completed_at", "updated_at"])
+            retry_names = []
+            for item_id, retry_kind, countdown in auto_retry_candidates:
+                retry_item = AgentGenerationItem.objects.select_related(
+                    "session",
+                    "session__preset",
+                ).get(id=item_id)
+                retry_names.append(retry_item.name)
+                cls._create_generation_job_for_item(
+                    session=retry_item.session,
+                    item=retry_item,
+                    retry_kind=retry_kind,
+                    countdown=countdown,
+                )
+            cls._add_assistant_message(
+                session,
+                f"遇到暫時性錯誤，我正在後台自動重試：{cls._summarize_names(retry_names)}。",
+                {
+                    "kind": "agent_status",
+                    "action": "auto_retry",
+                    "items": retry_names,
+                },
+            )
+            return
 
         current_statuses = [item.status for item in items]
         if session.status == AgentSessionStatus.GENERATING and all(
@@ -380,27 +460,18 @@ class AgentGenerationService:
             result_metadata = cls._result_message_metadata(session=session, items=items)
             if all(status == AgentItemStatus.ARCHIVED for status in current_statuses):
                 session.status = AgentSessionStatus.COMPLETED
-                cls._add_assistant_message(
-                    session,
-                    (
-                        f"素材已生成完成，我已把 "
-                        f"{len(result_metadata.get('assets', []))} 個完成素材整理到聊天裡，"
-                        "也附上一次下載全部的快捷操作。"
-                    ),
-                    result_metadata,
-                )
             elif any(status == AgentItemStatus.ARCHIVED for status in current_statuses):
                 session.status = AgentSessionStatus.PARTIAL
                 cls._add_assistant_message(
                     session,
-                    "部分素材已完成；已完成的結果已附在聊天中，失敗項目可以在清單中重試。",
+                    cls._partial_failure_message(items),
                     result_metadata,
                 )
             else:
                 session.status = AgentSessionStatus.FAILED
                 cls._add_assistant_message(
                     session,
-                    "這次素材生成失敗，請調整需求後重新開始一個對話。",
+                    cls._full_failure_message(items),
                 )
             session.completed_at = timezone.now()
             session.save(update_fields=["status", "completed_at", "updated_at"])
@@ -462,6 +533,16 @@ class AgentGenerationService:
             )
 
         session = AgentGenerationSession.objects.prefetch_related("messages").get(id=session.id)
+        quick_action = cls._quick_user_action(latest_user_message.content, session)
+        if quick_action:
+            cls._handle_direct_action(
+                user=user,
+                session=session,
+                message_id=latest_user_message.id,
+                action=quick_action,
+            )
+            return
+
         try:
             state = cls._analyze_conversation(user=user, session=session)
         except Exception as exc:
@@ -469,6 +550,15 @@ class AgentGenerationService:
                 session_id=session.id,
                 message_id=latest_user_message.id,
                 error=exc,
+            )
+            return
+
+        if state.get("action") in cls._DIRECT_ACTIONS:
+            cls._handle_direct_action(
+                user=user,
+                session=session,
+                message_id=latest_user_message.id,
+                action=str(state["action"]),
             )
             return
 
@@ -570,8 +660,6 @@ class AgentGenerationService:
 
         with transaction.atomic():
             locked = AgentGenerationSession.objects.select_for_update().get(id=session.id)
-            if locked.items.filter(generation_job__isnull=False).exists():
-                return cls.get_user_session(user=user, session_id=session.id)
             locked.brief = data["brief"]
             locked.output_name = data["output_name"]
             locked.game_genre = data["game_genre"]
@@ -579,7 +667,7 @@ class AgentGenerationService:
             locked.asset_requirements = asset_requirements
             locked.manifest = manifest
             locked.planning_steps = planning_steps
-            locked.preset = locked.preset or cls._create_style_preset(locked)
+            locked.preset = cls._create_style_preset(locked)
             locked.status = AgentSessionStatus.GENERATING
             locked.error = ""
             locked.approved_at = timezone.now()
@@ -603,22 +691,20 @@ class AgentGenerationService:
                     "updated_at",
                 ]
             )
-            if not locked.items.exists():
-                cls._create_items_from_manifest(session=locked, manifest=manifest)
+            new_item_ids = cls._create_items_from_manifest(session=locked, manifest=manifest)
             cls._add_assistant_message(
                 locked,
                 (
                     f"我已整理出 {len(manifest.get('items', []))} 個素材並開始生成；"
-                    "每張圖處理後都會先做重大缺失掃描，必要時自動返工。"
+                    "完成後你可以直接在同一個對話中繼續新增或修正需求。"
                 ),
                 {"approval_skipped": approval_skipped},
             )
-            item_ids = list(locked.items.order_by("sort_order").values_list("id", flat=True))
 
         refreshed = AgentGenerationSession.objects.select_related("preset", "user").get(
             id=session.id
         )
-        for item in AgentGenerationItem.objects.filter(id__in=item_ids).order_by("sort_order"):
+        for item in AgentGenerationItem.objects.filter(id__in=new_item_ids).order_by("sort_order"):
             cls._create_generation_job_for_item(session=refreshed, item=item)
 
         cls.sync_session(refreshed)
@@ -705,6 +791,10 @@ class AgentGenerationService:
             "required_when_uncertain": ["game_genre", "camera_view", "asset_count"],
             "camera_view_choices": sorted(SUPPORTED_VIEWS),
             "schema": {
+                "action": (
+                    "generate_assets|rework_assets|refresh_completed_assets|"
+                    "list_completed_assets|download_assets|retry_failed_items|answer"
+                ),
                 "ready": "boolean",
                 "reply": "Traditional Chinese assistant reply",
                 "missing": ["game_genre|camera_view|asset_count"],
@@ -724,6 +814,9 @@ class AgentGenerationService:
                     role=MessageRole.SYSTEM,
                     content=(
                         "You are PixelForge Conversation Orchestrator. "
+                        "First classify what action the user wants before extracting fields. "
+                        "If the user asks to refresh, reload, show, view, download, or retry "
+                        "existing assets, choose that action and do not create a new plan. "
                         "Extract only information the user gave or that is very safe to infer. "
                         "Only require total asset count, not category breakdown. "
                         "If game genre, camera view, or asset count are uncertain, ask a concise "
@@ -755,6 +848,7 @@ class AgentGenerationService:
     ) -> dict[str, Any]:
         fields = payload.get("fields") if isinstance(payload.get("fields"), dict) else {}
         context = dict(session.context or {})
+        action = cls._normalize_user_action(payload.get("action")) or "generate_assets"
         if fields.get("brief"):
             context["brief"] = cls._compact(fields["brief"], 4000)
         elif not context.get("brief"):
@@ -767,18 +861,27 @@ class AgentGenerationService:
             context["game_genre"] = cls._compact(fields["game_genre"], 80)
         if fields.get("camera_view"):
             context["camera_view"] = cls._normalize_view(fields["camera_view"])
+        asset_count = cls._normalize_asset_count(fields.get("asset_count"))
         if isinstance(fields.get("asset_requirements"), dict):
             context["asset_requirements"] = cls._normalize_requirements(
                 fields["asset_requirements"]
             )
+            if asset_count:
+                context["asset_requirements"] = cls._reconcile_asset_requirements(
+                    requirements=context["asset_requirements"],
+                    total_count=asset_count,
+                    brief=context.get("brief") or session.brief,
+                )
             context["asset_count"] = cls._asset_count_from_requirements(
                 context["asset_requirements"]
             )
-        asset_count = cls._normalize_asset_count(fields.get("asset_count"))
         if asset_count:
             context["asset_count"] = asset_count
             if not isinstance(fields.get("asset_requirements"), dict):
-                context["asset_requirements"] = {"props": asset_count}
+                context["asset_requirements"] = cls._infer_requirements(
+                    context.get("brief") or session.brief,
+                    total_count=asset_count,
+                ) or {"props": asset_count}
 
         missing = {
             str(item)
@@ -786,13 +889,23 @@ class AgentGenerationService:
             if str(item) in {"game_genre", "camera_view", "asset_count", "asset_requirements"}
         }
         if not context.get("game_genre"):
-            missing.add("game_genre")
+            inferred_genre = cls._infer_game_genre(context.get("brief") or session.brief)
+            if inferred_genre:
+                context["game_genre"] = inferred_genre
+                missing.discard("game_genre")
+            elif cls._can_use_generic_game_genre(context):
+                context["game_genre"] = "game asset"
+                missing.discard("game_genre")
+            else:
+                missing.add("game_genre")
         if context.get("camera_view") not in SUPPORTED_VIEWS:
             missing.add("camera_view")
         if not cls._normalize_asset_count(context.get("asset_count")):
             missing.add("asset_count")
 
-        ready = bool(payload.get("ready")) and not missing
+        ready = (bool(payload.get("ready")) or cls._is_ready_context(context)) and not missing
+        if action in cls._DIRECT_ACTIONS:
+            ready = False
         reply = cls._compact(payload.get("reply") or "", 1000)
         if not reply:
             reply = (
@@ -806,7 +919,127 @@ class AgentGenerationService:
             "reply": reply,
             "context": context,
             "missing": sorted(missing),
+            "action": action,
         }
+
+    @classmethod
+    def _quick_user_action(cls, text: str, session: AgentGenerationSession) -> str:
+        """用保守關鍵字先攔截不應進入重新規劃的工具型需求。"""
+        normalized = str(text or "").strip().lower()
+        if not normalized:
+            return ""
+        has_existing_items = session.items.exists() if session.id else False
+        if not has_existing_items:
+            return ""
+        if any(marker in normalized for marker in ["刷新", "重新整理", "refresh", "reload"]):
+            if any(marker in normalized for marker in ["已完成", "完成", "素材", "圖片", "結果"]):
+                return "refresh_completed_assets"
+        if any(marker in normalized for marker in ["列出", "查看", "看一下", "show", "list"]):
+            if any(marker in normalized for marker in ["已完成", "完成", "素材", "圖片", "結果"]):
+                return "list_completed_assets"
+        if any(marker in normalized for marker in ["下載", "download"]):
+            return "download_assets"
+        if any(marker in normalized for marker in ["重試", "再試", "retry"]):
+            if any(marker in normalized for marker in ["失敗", "錯誤", "failed", "error"]):
+                return "retry_failed_items"
+        return ""
+
+    @classmethod
+    def _normalize_user_action(cls, value: Any) -> str:
+        action = str(value or "").strip()
+        allowed = cls._DIRECT_ACTIONS | {"generate_assets", "rework_assets", "answer"}
+        return action if action in allowed else ""
+
+    @classmethod
+    def _handle_direct_action(
+        cls,
+        *,
+        user,
+        session: AgentGenerationSession,
+        message_id: str | UUID,
+        action: str,
+    ) -> None:
+        """處理刷新、查看、下載與重試等不需要重新規劃的對話動作。"""
+        session = AgentGenerationSession.objects.select_related("user").get(id=session.id)
+        if action in {"refresh_completed_assets", "list_completed_assets", "download_assets"}:
+            cls.sync_session(session)
+            refreshed = cls.get_user_session(user=user, session_id=session.id)
+            counts = refreshed.item_counts if hasattr(refreshed, "item_counts") else None
+            items = list(refreshed.items.all())
+            archived_count = sum(1 for item in items if item.status == AgentItemStatus.ARCHIVED)
+            failed_count = sum(1 for item in items if item.status == AgentItemStatus.FAILED)
+            total_count = len(items)
+            if action == "download_assets":
+                reply = (
+                    "下載全部按鈕已放在聊天視窗右上方；"
+                    f"目前有 {archived_count} 個已完成素材可下載。"
+                )
+            else:
+                reply = (
+                    f"已重新整理目前素材狀態：完成 {archived_count}/{total_count}，"
+                    f"失敗 {failed_count}。"
+                )
+            cls._finish_direct_action(
+                session_id=session.id,
+                message_id=message_id,
+                reply=reply,
+                metadata={
+                    "kind": "agent_status",
+                    "action": action,
+                    "archived": archived_count,
+                    "failed": failed_count,
+                    "total": total_count,
+                    "item_counts": counts or {},
+                },
+            )
+            return
+
+        if action == "retry_failed_items":
+            retried = cls._retry_failed_items(user=user, session=session, automatic=False)
+            reply = (
+                f"我已把 {retried} 個可重試的失敗素材重新排入後台。"
+                if retried
+                else "目前沒有可重試的失敗素材；若錯誤持續，請調整描述或稍後再試。"
+            )
+            cls._finish_direct_action(
+                session_id=session.id,
+                message_id=message_id,
+                reply=reply,
+                metadata={"kind": "agent_status", "action": action, "retried": retried},
+            )
+            return
+
+    @classmethod
+    def _finish_direct_action(
+        cls,
+        *,
+        session_id: str | UUID,
+        message_id: str | UUID,
+        reply: str,
+        metadata: dict[str, Any],
+    ) -> None:
+        with transaction.atomic():
+            session = AgentGenerationSession.objects.select_for_update().get(id=session_id)
+            if session.processing_message_id and session.processing_message_id != message_id:
+                return
+            update_fields = [
+                "last_processed_message_id",
+                "processing_message_id",
+                "processing_started_at",
+                "updated_at",
+            ]
+            if session.status != AgentSessionStatus.GENERATING:
+                session.status = AgentSessionStatus.CHATTING
+                update_fields.append("status")
+            session.last_processed_message_id = message_id
+            session.processing_message_id = None
+            session.processing_started_at = None
+            session.save(update_fields=update_fields)
+        cls._add_assistant_message(
+            AgentGenerationSession.objects.get(id=session_id),
+            reply,
+            metadata,
+        )
 
     @classmethod
     def _build_manifest(
@@ -823,10 +1056,24 @@ class AgentGenerationService:
             "game_genre": data.get("game_genre", ""),
             "camera_view": data.get("camera_view", "top-down"),
             "asset_requirements": asset_requirements,
+            "target_asset_count": cls._asset_count_from_requirements(asset_requirements),
             "rules": [
                 "Return strict JSON only.",
                 "Use safe nonviolent wording for image generation.",
                 "Each item must be a single centered 2D pixel-art game asset.",
+                (
+                    "Generate exactly target_asset_count items and exactly the requested count "
+                    "for each asset_requirements category."
+                ),
+                (
+                    "Do not collapse a broad MVP request into only the first mentioned item; "
+                    "expand it into a minimal playable set."
+                ),
+                (
+                    "Preserve all important user requirements from brief in item subjects "
+                    "and prompt_brief."
+                ),
+                "Use item.category values that exactly match asset_requirements keys.",
                 (
                     "Avoid detailed combat, gore, real weapon brand names, text, UI, "
                     "background scenery."
@@ -1084,9 +1331,9 @@ class AgentGenerationService:
     def _normalize_item(cls, item: dict[str, Any], index: int) -> dict[str, Any]:
         category = cls._compact(item.get("category") or "props", 80)
         name = cls._compact(item.get("name") or f"{category} {index}", 120)
-        subject = cls._compact(item.get("subject") or name, 160)
+        subject = cls._compact(item.get("subject") or name, 220)
         asset_type = cls._compact(item.get("asset_type") or "prop", 40)
-        prompt_brief = cls._compact(item.get("prompt_brief") or subject, 300)
+        prompt_brief = cls._compact(item.get("prompt_brief") or subject, 500)
         return {
             "category": category,
             "name": name,
@@ -1135,6 +1382,30 @@ class AgentGenerationService:
         return result
 
     @classmethod
+    def _reconcile_asset_requirements(
+        cls,
+        *,
+        requirements: dict[str, int],
+        total_count: int,
+        brief: str,
+    ) -> dict[str, int]:
+        """讓總數優先於 LLM 偶發輸出的錯誤類別數量。"""
+        total_count = cls._normalize_asset_count(total_count)
+        if not total_count:
+            return requirements
+
+        current_total = cls._asset_count_from_requirements(requirements)
+        if current_total == total_count:
+            return requirements
+
+        inferred = cls._infer_requirements(brief, total_count=total_count)
+        if inferred:
+            return inferred
+
+        categories = list(requirements) or ["props"]
+        return cls._distribute_count(total_count, categories)
+
+    @classmethod
     def _normalize_style(cls, style: dict[str, Any], output_name: str) -> dict[str, Any]:
         palette = style.get("palette_hex") if isinstance(style.get("palette_hex"), list) else []
         palette_hex = [str(color).strip() for color in palette if cls._is_hex_color(str(color))][
@@ -1167,7 +1438,6 @@ class AgentGenerationService:
                 "label": f"拆解素材清單（{len(manifest.get('items', []))} 項）",
                 "status": "done",
             },
-            {"key": "agent_rework", "label": "啟用處理後缺失掃描與返工", "status": "active"},
         ]
 
     @classmethod
@@ -1176,8 +1446,11 @@ class AgentGenerationService:
         *,
         session: AgentGenerationSession,
         manifest: dict[str, Any],
-    ) -> None:
+    ) -> list[UUID]:
         items = []
+        max_sort_order = session.items.aggregate(max_sort_order=Max("sort_order"))[
+            "max_sort_order"
+        ] or 0
         for index, item in enumerate(manifest.get("items", []), start=1):
             items.append(
                 AgentGenerationItem(
@@ -1187,11 +1460,19 @@ class AgentGenerationService:
                     subject=item["subject"],
                     asset_type=item["asset_type"],
                     prompt_brief=item["prompt_brief"],
-                    sort_order=index,
+                    sort_order=max_sort_order + index,
                     metadata={"manifest_item": item},
                 )
             )
-        AgentGenerationItem.objects.bulk_create(items)
+        created_items = AgentGenerationItem.objects.bulk_create(items)
+        return [item.id for item in created_items]
+
+    @classmethod
+    def _processors_for_config(cls, processor_config: dict[str, Any]) -> list[str]:
+        processors = ["bg_remover", "perfect_pixel"]
+        if isinstance(processor_config.get("upscaler"), dict):
+            processors.append("upscaler")
+        return processors
 
     @classmethod
     def _plan_ready_message(cls, manifest: dict[str, Any]) -> str:
@@ -1209,14 +1490,17 @@ class AgentGenerationService:
         key = cls._unique_style_key(session.output_name)
         palette_key = f"{key}-palette"
         processors = {
-            "default": DEFAULT_PROCESSORS,
+            "default": cls._processors_for_config(cls._DEFAULT_PROCESSOR_CONFIG),
             "config": cls._DEFAULT_PROCESSOR_CONFIG,
         }
         prompt_config = {
             "subject_template": "{subject}",
             "base": "2D pixel-art game asset, single object",
             "style": style.get("style_phrase", "cohesive 8-color pixel art"),
-            "composition": "centered full object, clear silhouette, solid magenta background",
+            "composition": (
+                "centered full object, clear silhouette, generous empty margin, "
+                "uniform flat solid magenta background only, no gradient, no vignette"
+            ),
             "quality": "clean pixel clusters, readable sprite, no text",
         }
         return StylePreset.objects.create(
@@ -1236,7 +1520,10 @@ class AgentGenerationService:
             processor_defaults=processors,
             palette_hex=style.get("palette_hex", cls._DEFAULT_PALETTE),
             art_direction=style.get("art_direction", ""),
-            background="solid #FF00FF background, no shadow/glow",
+            background=(
+                "uniform flat #FF00FF background only, no gradient, "
+                "no vignette, no shadow/glow"
+            ),
             negative="",
             model_params={
                 "template_version": 1,
@@ -1257,17 +1544,19 @@ class AgentGenerationService:
         *,
         session: AgentGenerationSession,
         item: AgentGenerationItem,
+        retry_kind: str = "",
+        countdown: int = 0,
     ) -> GenerationJob:
         preset = session.preset
         if not preset:
             raise ValidationError("Agent Session 尚未建立風格預設")
         job = GenerationJobService.create_job(
             user=session.user,
-            subject=item.subject,
+            subject=cls._generation_subject_for_item(item, retry_kind=retry_kind),
             preset=preset,
             view=session.camera_view,
             mode="single",
-            processors=DEFAULT_PROCESSORS,
+            processors=cls._processors_for_config(cls._DEFAULT_PROCESSOR_CONFIG),
             processor_config=cls._DEFAULT_PROCESSOR_CONFIG,
             provider_name="",
             model="",
@@ -1280,6 +1569,8 @@ class AgentGenerationService:
             "item_name": item.name,
             "category": item.category,
             "prompt_brief": item.prompt_brief,
+            "subject": item.subject,
+            "retry_kind": retry_kind,
             "rework_enabled": True,
         }
         job.metadata = metadata
@@ -1301,7 +1592,13 @@ class AgentGenerationService:
         from modules.generation_jobs.tasks import generate_asset_task
 
         try:
-            async_result = generate_asset_task.delay(str(job.id))
+            if countdown > 0:
+                async_result = generate_asset_task.apply_async(
+                    args=[str(job.id)],
+                    countdown=countdown,
+                )
+            else:
+                async_result = generate_asset_task.delay(str(job.id))
         except Exception as exc:
             error = f"生成任務排程失敗: {exc}"
             job.status = ForgeJobStatus.FAILED
@@ -1432,6 +1729,132 @@ class AgentGenerationService:
             "download_all_url": f"/api/v1/agent-generation/sessions/{session.id}/download/",
         }
 
+    @classmethod
+    def _item_result_metadata(cls, item: AgentGenerationItem) -> dict[str, Any]:
+        asset_id = str((item.metadata or {}).get("asset_id", ""))
+        assets = []
+        if asset_id:
+            assets.append(
+                {
+                    "item_id": str(item.id),
+                    "name": item.name,
+                    "subject": item.subject,
+                    "asset_id": asset_id,
+                    "thumbnail_url": f"/api/v1/assets/{asset_id}/thumbnail/",
+                    "image_url": f"/api/v1/assets/{asset_id}/image/",
+                    "origin_url": f"/api/v1/assets/{asset_id}/origin/",
+                }
+            )
+        return {
+            "kind": "generation_item_result",
+            "item_id": str(item.id),
+            "asset_count": len(assets),
+            "assets": assets,
+        }
+
+    @classmethod
+    def _retry_failed_items(
+        cls,
+        *,
+        user,
+        session: AgentGenerationSession,
+        automatic: bool,
+    ) -> int:
+        retried = 0
+        failed_items = session.items.select_related("generation_job", "session__preset").filter(
+            status=AgentItemStatus.FAILED
+        )
+        for item in failed_items:
+            retry_kind = cls._retriable_error_kind(item.last_error)
+            if not retry_kind and automatic:
+                continue
+            if item.retry_count >= session.max_retry_per_item:
+                continue
+            with transaction.atomic():
+                locked = AgentGenerationItem.objects.select_for_update().get(id=item.id)
+                locked.retry_count += 1
+                locked.status = AgentItemStatus.PLANNED
+                locked.metadata = {
+                    **(locked.metadata or {}),
+                    "manual_retry": not automatic,
+                    "retry_kind": retry_kind or "manual",
+                }
+                locked.save(update_fields=["retry_count", "status", "metadata", "updated_at"])
+                if session.status in {
+                    AgentSessionStatus.PARTIAL,
+                    AgentSessionStatus.FAILED,
+                    AgentSessionStatus.CHATTING,
+                }:
+                    session.status = AgentSessionStatus.GENERATING
+                    session.completed_at = None
+                    session.save(update_fields=["status", "completed_at", "updated_at"])
+            cls._create_generation_job_for_item(
+                session=session,
+                item=AgentGenerationItem.objects.get(id=item.id),
+                retry_kind=retry_kind or "manual",
+                countdown=0,
+            )
+            retried += 1
+        return retried
+
+    @staticmethod
+    def _retriable_error_kind(error: str) -> str:
+        text = str(error or "").lower()
+        if not text:
+            return ""
+        if any(
+            marker in text
+            for marker in ["429", "ratelimit", "rate limit", "too many requests"]
+        ):
+            return "rate_limit"
+        if any(
+            marker in text
+            for marker in [
+                "content rejected",
+                "violence detection",
+                "content policy",
+                "safety",
+                "illegal content",
+            ]
+        ):
+            return "content_policy"
+        return ""
+
+    @staticmethod
+    def _auto_retry_delay_seconds(attempt: int) -> int:
+        return min(300, max(30, 30 * attempt))
+
+    @classmethod
+    def _partial_failure_message(cls, items: list[AgentGenerationItem]) -> str:
+        failed_items = [item for item in items if item.status == AgentItemStatus.FAILED]
+        if not failed_items:
+            return "部分素材已完成；其餘素材仍在處理中。"
+        advice = cls._failure_advice(failed_items)
+        return f"部分素材已完成，但仍有 {len(failed_items)} 個失敗。{advice}"
+
+    @classmethod
+    def _full_failure_message(cls, items: list[AgentGenerationItem]) -> str:
+        advice = cls._failure_advice(items)
+        return f"這次素材生成沒有成功。{advice}"
+
+    @classmethod
+    def _failure_advice(cls, items: list[AgentGenerationItem]) -> str:
+        errors = "\n".join(str(item.last_error or "") for item in items)
+        if cls._retriable_error_kind(errors) == "rate_limit":
+            return "主要原因是圖像供應商限流，建議稍後重試，或先把批次拆小。"
+        if cls._retriable_error_kind(errors) == "content_policy":
+            return "主要原因是內容審查，建議改用更安全、非戰鬥、玩具化或障礙物描述。"
+        return "請調整描述後再送一次，我會依新的需求重新規劃。"
+
+    @staticmethod
+    def _summarize_names(names: list[str]) -> str:
+        clean_names = [name for name in names if name]
+        if not clean_names:
+            return "失敗素材"
+        if len(clean_names) <= 3:
+            return "、".join(clean_names)
+        return "、".join(clean_names[:3]) + f" 等 {len(clean_names)} 個素材"
+
     @staticmethod
     def _revoke_tasks(task_ids: list[str]) -> None:
         if not task_ids:
@@ -1481,6 +1904,21 @@ class AgentGenerationService:
         )
 
     @classmethod
+    def _can_use_generic_game_genre(cls, context: dict[str, Any]) -> bool:
+        """單一素材或明確素材包描述可使用通用遊戲素材，不必追問遊戲類型。"""
+        brief = str(context.get("brief") or "").lower()
+        asset_count = cls._normalize_asset_count(context.get("asset_count"))
+        has_asset_language = any(
+            marker in brief
+            for marker in ["素材", "asset", "sprite", "icon", "物件", "道具", "收集物"]
+        )
+        return bool(
+            has_asset_language
+            and asset_count
+            and context.get("camera_view") in SUPPORTED_VIEWS
+        )
+
+    @classmethod
     def _normalize_view(cls, value: Any) -> str:
         text = str(value or "").strip().lower().replace("_", "-")
         aliases = {
@@ -1513,20 +1951,84 @@ class AgentGenerationService:
         return ""
 
     @classmethod
-    def _infer_requirements(cls, text: str) -> dict[str, int]:
-        inferred_total = cls._infer_asset_count(text)
-        category_aliases = {
-            "characters": ["character", "角色", "人物"],
-            "creatures": ["creature", "怪物", "生物"],
-            "props": ["prop", "道具", "素材", "物件"],
-            "environment_tiles": ["tile", "地形", "場景", "地塊"],
-            "ui_icons": ["ui", "icon", "圖示", "介面"],
-            "effects": ["effect", "特效", "光效"],
+    def _infer_requirements(cls, text: str, total_count: int | None = None) -> dict[str, int]:
+        inferred_total = cls._normalize_asset_count(total_count) or cls._infer_asset_count(text)
+        if not inferred_total:
+            return {}
+
+        lower_text = text.lower()
+
+        def has_any(markers: list[str]) -> bool:
+            return any(marker.lower() in lower_text for marker in markers)
+
+        categories: list[str] = []
+        fixed_counts: dict[str, int] = {}
+        if has_any(["主角", "character", "角色", "人物", "少女", "hero"]):
+            categories.append("characters")
+            if has_any(["主角", "hero", "main character"]):
+                fixed_counts["characters"] = 1
+        if has_any(["敵人", "enemy", "enemies", "怪物", "生物", "pac-man", "貪吃蛇"]):
+            categories.append("enemies")
+        if has_any(["場景物件", "場景物品", "特色物件", "物件", "道具", "props"]):
+            categories.append("environment_props")
+        if has_any(["tile", "地形", "地塊", "平台", "地板", "牆"]):
+            categories.append("environment_tiles")
+        if has_any(["ui", "icon", "圖示", "介面"]):
+            categories.append("ui_icons")
+        if has_any(["effect", "特效", "光效"]):
+            categories.append("effects")
+
+        deduped_categories = list(dict.fromkeys(categories))
+        if not deduped_categories:
+            return {"props": inferred_total}
+
+        remaining_total = inferred_total
+        result: dict[str, int] = {}
+        for category in deduped_categories:
+            fixed_count = min(fixed_counts.get(category, 0), remaining_total)
+            if fixed_count:
+                result[category] = fixed_count
+                remaining_total -= fixed_count
+
+        remaining_categories = [
+            category
+            for category in deduped_categories
+            if category not in result and remaining_total > 0
+        ]
+        if remaining_categories:
+            result.update(cls._distribute_count(remaining_total, remaining_categories))
+        elif remaining_total:
+            result[deduped_categories[0]] = result.get(deduped_categories[0], 0) + remaining_total
+        return result
+
+    @classmethod
+    def _distribute_count(cls, total_count: int, categories: list[str]) -> dict[str, int]:
+        if not categories or total_count <= 0:
+            return {}
+        total_count = min(total_count, cls._MAX_ITEMS)
+        selected_categories = categories[:total_count]
+        base_count, remainder = divmod(total_count, len(selected_categories))
+        return {
+            category: base_count + (1 if index < remainder else 0)
+            for index, category in enumerate(selected_categories)
         }
-        for category, markers in category_aliases.items():
-            if any(marker in text.lower() for marker in markers):
-                return {category: max(1, min(inferred_total or 3, cls._MAX_ITEMS))}
-        return {"props": max(1, min(inferred_total, cls._MAX_ITEMS))} if inferred_total else {}
+
+    @classmethod
+    def _generation_subject_for_item(cls, item: AgentGenerationItem, retry_kind: str = "") -> str:
+        prompt_brief = str(item.prompt_brief or "").strip()
+        subject = str(item.subject or "").strip()
+        name = str(item.name or "").strip()
+        safety_suffix = ""
+        if retry_kind == "content_policy":
+            safety_suffix = (
+                " Use harmless toy-like wording, avoid combat, violence, weapons, attacks, "
+                "threats, injuries, or scary details; describe it as a friendly obstacle asset."
+            )
+        if prompt_brief:
+            if name and name.lower() not in prompt_brief.lower():
+                return cls._compact(f"{name}: {prompt_brief}{safety_suffix}", 500)
+            return cls._compact(f"{prompt_brief}{safety_suffix}", 500)
+        return cls._compact(f"{subject or name}{safety_suffix}", 500)
 
     @staticmethod
     def _infer_asset_count(text: str) -> int:

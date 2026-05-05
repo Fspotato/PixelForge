@@ -9,8 +9,20 @@ User = get_user_model()
 class LoginSerializer(serializers.Serializer):
     """登入請求序列化器。"""
 
-    email = serializers.EmailField()
+    identifier = serializers.CharField(required=False, allow_blank=False, trim_whitespace=True)
+    email = serializers.EmailField(required=False, write_only=True)
     password = serializers.CharField(write_only=True)
+
+    def validate(self, attrs):
+        """相容舊版 email 欄位，並統一轉成 identifier。"""
+
+        identifier = (attrs.get("identifier") or attrs.get("email") or "").strip()
+        if not identifier:
+            raise serializers.ValidationError("請輸入 email 或使用者名稱")
+
+        attrs["identifier"] = identifier
+        attrs.pop("email", None)
+        return attrs
 
 
 class RegisterSerializer(serializers.Serializer):

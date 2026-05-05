@@ -574,8 +574,8 @@ class GenerationJobService:
             return None
 
         attempts = [
-            ("flood_fill", {"method": "flood_fill", "tolerance": 8, "corner_threshold": 1}),
-            ("subject", {"method": "subject", "tolerance": 10, "min_foreground_ratio": 0.01}),
+            ("flood_fill", {"method": "flood_fill", "tolerance": 18, "corner_threshold": 0}),
+            ("subject", {"method": "subject", "tolerance": 18, "min_foreground_ratio": 0.01}),
         ]
         best_result = None
         best_config = None
@@ -632,6 +632,21 @@ class GenerationJobService:
         visible_pixels = total_pixels - histogram[0]
         foreground_ratio = visible_pixels / total_pixels
         bbox = alpha.getbbox()
+        touches_edge = False
+        edge_visible_ratio = 0.0
+        if width > 0 and height > 0:
+            edge_pixels = max(width * 2 + max(height - 2, 0) * 2, 1)
+            edge_visible = 0
+            alpha_data = alpha.load()
+            for x in range(width):
+                edge_visible += int(alpha_data[x, 0] > 0)
+                if height > 1:
+                    edge_visible += int(alpha_data[x, height - 1] > 0)
+            for y in range(1, max(height - 1, 1)):
+                edge_visible += int(alpha_data[0, y] > 0)
+                if width > 1:
+                    edge_visible += int(alpha_data[width - 1, y] > 0)
+            edge_visible_ratio = edge_visible / edge_pixels
         reason = ""
         needs_rework = False
         if bbox is None or visible_pixels == 0:
@@ -640,10 +655,20 @@ class GenerationJobService:
         elif foreground_ratio < 0.012:
             needs_rework = True
             reason = "processed_subject_too_small"
+        else:
+            touches_edge = bbox[0] <= 0 or bbox[1] <= 0 or bbox[2] >= width or bbox[3] >= height
+            if foreground_ratio >= 0.88:
+                needs_rework = True
+                reason = "processed_background_not_removed"
+            elif touches_edge and edge_visible_ratio >= 0.08:
+                needs_rework = True
+                reason = "processed_background_touches_edge"
         return {
             "needs_rework": needs_rework,
             "reason": reason,
             "foreground_ratio": round(foreground_ratio, 6),
+            "edge_visible_ratio": round(edge_visible_ratio, 6),
+            "touches_edge": touches_edge,
             "bbox": list(bbox) if bbox else None,
         }
 

@@ -8,14 +8,13 @@ from .models import EmailVerification, SocialAccount, User
 class UserAdmin(BaseUserAdmin):
     """自訂使用者管理介面"""
 
-    list_display = ("email", "status", "is_active", "is_staff", "created_at")
+    list_display = ("email", "username", "status", "is_active", "is_staff", "created_at")
     list_filter = ("status", "is_active", "is_staff")
-    search_fields = ("email", "first_name", "last_name")
+    search_fields = ("email", "username", "first_name", "last_name")
     ordering = ("-created_at",)
 
-    # 覆寫 fieldsets 以適配 email-based User（移除 username）
     fieldsets = (
-        (None, {"fields": ("email", "password")}),
+        (None, {"fields": ("email", "username", "password")}),
         ("個人資料", {"fields": ("first_name", "last_name", "avatar")}),
         ("帳號狀態", {"fields": ("status", "is_active", "is_staff", "is_superuser")}),
         ("權限", {"fields": ("groups", "user_permissions")}),
@@ -29,7 +28,7 @@ class UserAdmin(BaseUserAdmin):
             None,
             {
                 "classes": ("wide",),
-                "fields": ("email", "password1", "password2", "is_active", "is_staff"),
+                "fields": ("email", "username", "password1", "password2", "is_active", "is_staff"),
             },
         ),
     )

@@ -15,6 +15,7 @@ class UserSerializer(BaseModelSerializer):
         fields = [
             "id",
             "email",
+            "username",
             "first_name",
             "last_name",
             "full_name",
@@ -24,7 +25,7 @@ class UserSerializer(BaseModelSerializer):
             "settings_data",
             "created_at",
         ]
-        read_only_fields = ["id", "email", "status", "last_login_at", "created_at"]
+        read_only_fields = ["id", "email", "username", "status", "last_login_at", "created_at"]
 
 
 class UserUpdateSerializer(BaseModelSerializer):

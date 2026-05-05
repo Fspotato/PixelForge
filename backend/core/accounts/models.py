@@ -1,6 +1,7 @@
 import uuid
 
 from django.contrib.auth.models import AbstractBaseUser, PermissionsMixin
+from django.core.validators import RegexValidator
 from django.db import models
 
 from core._common.base_models import TimestampMixin, UUIDPrimaryKeyMixin
@@ -19,6 +20,17 @@ class User(AbstractBaseUser, PermissionsMixin, TimestampMixin):
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     email = models.EmailField(unique=True, db_index=True)
+    username = models.CharField(
+        max_length=150,
+        unique=True,
+        db_index=True,
+        validators=[
+            RegexValidator(
+                regex=r"^[a-z0-9._-]+$",
+                message="使用者名稱只能包含小寫英文字母、數字、點、底線與連字號",
+            )
+        ],
+    )
     first_name = models.CharField(max_length=150, blank=True)
     last_name = models.CharField(max_length=150, blank=True)
     avatar = models.ImageField(upload_to="avatars/%Y/%m/", blank=True, null=True)

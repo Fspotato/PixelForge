@@ -51,6 +51,11 @@ class TestUserModelFields:
         field = User._meta.get_field("email")
         assert field.unique is True
 
+    def test_has_username_field(self):
+        field = User._meta.get_field("username")
+        assert field.unique is True
+        assert field.max_length == 150
+
     def test_has_first_name_field(self):
         field = User._meta.get_field("first_name")
         assert field.max_length == 150
@@ -109,6 +114,7 @@ class TestUserSerializerFields:
         expected_fields = {
             "id",
             "email",
+            "username",
             "first_name",
             "last_name",
             "full_name",
@@ -126,8 +132,30 @@ class TestUserSerializerFields:
         read_only_field_names = {
             name for name, field in serializer.fields.items() if field.read_only
         }
-        expected_read_only = {"id", "email", "status", "last_login_at", "created_at", "full_name"}
+        expected_read_only = {
+            "id",
+            "email",
+            "username",
+            "status",
+            "last_login_at",
+            "created_at",
+            "full_name",
+        }
         assert expected_read_only.issubset(read_only_field_names)
+
+
+@pytest.mark.django_db
+class TestUserManager:
+    """測試 User manager 會自動建立使用者名稱。"""
+
+    def test_create_user_generates_username_from_email(self):
+        user = User.objects.create_user(email="Demo.User@example.com", password="testpass123")
+        assert user.username == "demo.user"
+
+    def test_create_user_deduplicates_generated_username(self):
+        User.objects.create_user(email="demo@example.com", password="testpass123")
+        user = User.objects.create_user(email="demo@another.com", password="testpass123")
+        assert user.username == "demo_2"
 
 
 # ---------------------------------------------------------------------------

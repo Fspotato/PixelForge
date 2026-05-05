@@ -1,4 +1,4 @@
-import type { RequestConfig, ApiResponse } from "../types"
+import type { RequestConfig, ApiResponse, BlobApiResponse } from "../types"
 
 const CSRF_COOKIE_NAME = "csrftoken"
 const CSRF_HEADER_NAME = "X-CSRFToken"
@@ -56,7 +56,15 @@ async function readResponseBody(response: Response): Promise<unknown> {
   return response.text()
 }
 
-async function performRequest(config: RequestConfig): Promise<ApiResponse> {
+function readResponseHeaders(response: Response): Record<string, string> {
+  const responseHeaders: Record<string, string> = {}
+  response.headers.forEach((value, key) => {
+    responseHeaders[key] = value
+  })
+  return responseHeaders
+}
+
+async function performFetch(config: RequestConfig): Promise<{ response: Response; duration: number }> {
   const startTime = performance.now()
   const requestHeaders = new Headers(config.headers)
   const needsCsrf = !SAFE_METHODS.has(config.method)
@@ -75,19 +83,33 @@ async function performRequest(config: RequestConfig): Promise<ApiResponse> {
     init.body = config.body
   }
 
-  const res = await fetch(config.url, init)
-  const duration = Math.round(performance.now() - startTime)
+  const response = await fetch(config.url, init)
+  return {
+    response,
+    duration: Math.round(performance.now() - startTime),
+  }
+}
 
-  const responseHeaders: Record<string, string> = {}
-  res.headers.forEach((value, key) => {
-    responseHeaders[key] = value
-  })
+async function performRequest(config: RequestConfig): Promise<ApiResponse> {
+  const { response, duration } = await performFetch(config)
 
   return {
-    status: res.status,
-    statusText: res.statusText,
-    headers: responseHeaders,
-    body: await readResponseBody(res),
+    status: response.status,
+    statusText: response.statusText,
+    headers: readResponseHeaders(response),
+    body: await readResponseBody(response),
+    duration,
+  }
+}
+
+async function performBlobRequest(config: RequestConfig): Promise<BlobApiResponse> {
+  const { response, duration } = await performFetch(config)
+
+  return {
+    status: response.status,
+    statusText: response.statusText,
+    headers: readResponseHeaders(response),
+    body: await response.blob(),
     duration,
   }
 }
@@ -122,12 +144,11 @@ async function refreshAuthSession(): Promise<boolean> {
   }
 }
 
-/**
- * 發送 HTTP 請求並回傳包含計時的回應。
- * 用於 API 測試面板的底層請求函式。
- */
-export async function sendRequest(config: RequestConfig): Promise<ApiResponse> {
-  const response = await performRequest(config)
+async function withRefreshRetry<T extends { status: number }>(
+  config: RequestConfig,
+  execute: (config: RequestConfig) => Promise<T>,
+): Promise<T> {
+  const response = await execute(config)
 
   if (response.status !== 401 || !shouldAttemptRefresh(config.url)) {
     return response
@@ -146,9 +167,22 @@ export async function sendRequest(config: RequestConfig): Promise<ApiResponse> {
     return response
   }
 
-  const retriedResponse = await performRequest(config)
+  const retriedResponse = await execute(config)
   if (retriedResponse.status === 401) {
     window.dispatchEvent(new CustomEvent(AUTH_CLEARED_EVENT))
   }
   return retriedResponse
+}
+
+/**
+ * 發送 HTTP 請求並回傳包含計時的回應。
+ * 用於 API 測試面板的底層請求函式。
+ */
+export async function sendRequest(config: RequestConfig): Promise<ApiResponse> {
+  return withRefreshRetry(config, performRequest)
+}
+
+/** 取得需要認證的二進位內容，並沿用同樣的自動續期邏輯。 */
+export async function sendBlobRequest(config: RequestConfig): Promise<BlobApiResponse> {
+  return withRefreshRetry(config, performBlobRequest)
 }

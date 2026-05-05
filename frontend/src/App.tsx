@@ -10,6 +10,7 @@ import { OrderSyncPanel } from "./components/OrderSyncPanel"
 import { SubscriptionSyncPanel } from "./components/SubscriptionSyncPanel"
 import { CatalogActionPanel } from "./components/CatalogActionPanel"
 import { EntityBrowserPanel } from "./components/EntityBrowserPanel"
+import { ImageViewerPage } from "./components/ImageViewerPage"
 import { PaymentResultPage } from "./components/PaymentResultPage"
 import { SocialLoginPanel } from "./components/SocialLoginPanel"
 import { testCases } from "./data/testCases"
@@ -150,6 +151,8 @@ interface Asset {
   metadata_url: string
 }
 
+type AssetViewerVariant = "image" | "origin"
+
 interface ProviderConfig {
   id: string
   name: string
@@ -232,7 +235,7 @@ interface AgentGenerationSession {
 const PROCESSOR_DEFS: Record<string, { label: string; description: string }> = {
   bg_remover: { label: "背景移除", description: "移除 AI 生圖背景，預設用品紅 chroma key" },
   alpha_trimmer: { label: "透明裁切", description: "裁切透明邊界並保留 padding" },
-  perfect_pixel: { label: "像素修正", description: "重取樣、硬化 alpha、清理離群像素" },
+  perfect_pixel: { label: "完美像素", description: "自動偵測格線並重建對齊的像素圖" },
   palette_mapper: { label: "模板色盤", description: "強制映射到所選風格色盤" },
   color_quantizer: { label: "自動量化", description: "自動降低色數並保留高光" },
   upscaler: { label: "像素放大", description: "以最近鄰插值輸出展示圖" },
@@ -319,24 +322,35 @@ function totalAssetCount(requirements: Record<string, number> | undefined) {
   return Object.values(requirements ?? {}).reduce((sum, value) => sum + (Number.isFinite(value) ? value : 0), 0)
 }
 
+function buildAssetViewerUrl(assetId: string, variant: AssetViewerVariant, title?: string) {
+  const params = new URLSearchParams({
+    assetId,
+    variant,
+  })
+  if (title?.trim()) {
+    params.set("title", title.trim())
+  }
+  return `/image-viewer?${params.toString()}`
+}
+
 interface PixelForgeLoginScreenProps {
-  loginEmail: string
+  loginIdentifier: string
   loginPassword: string
   message: string
   title: string
   description: string
-  onLoginEmailChange: (value: string) => void
+  onLoginIdentifierChange: (value: string) => void
   onLoginPasswordChange: (value: string) => void
   onLogin: () => void
 }
 
 function PixelForgeLoginScreen({
-  loginEmail,
+  loginIdentifier,
   loginPassword,
   message,
   title,
   description,
-  onLoginEmailChange,
+  onLoginIdentifierChange,
   onLoginPasswordChange,
   onLogin,
 }: PixelForgeLoginScreenProps) {
@@ -348,17 +362,20 @@ function PixelForgeLoginScreen({
         <p className="text-slate-300">{description}</p>
         <div className="rounded-2xl border border-white/10 bg-white/5 p-4 text-left space-y-3">
           <label className="block text-sm">
-            Email
+            Email 或使用者名稱
             <input
               className="mt-1 w-full rounded-lg border border-white/10 bg-slate-950 p-3"
-              value={loginEmail}
-              onChange={(event) => onLoginEmailChange(event.target.value)}
+              autoComplete="username"
+              placeholder="輸入 email 或使用者名稱"
+              value={loginIdentifier}
+              onChange={(event) => onLoginIdentifierChange(event.target.value)}
             />
           </label>
           <label className="block text-sm">
             Password
             <input
               className="mt-1 w-full rounded-lg border border-white/10 bg-slate-950 p-3"
+              autoComplete="current-password"
               type="password"
               value={loginPassword}
               onChange={(event) => onLoginPasswordChange(event.target.value)}
@@ -383,6 +400,28 @@ function PixelForgeLoginScreen({
   )
 }
 
+function extractApiErrorMessage(body: unknown, fallbackMessage: string): string {
+  if (!body || typeof body !== "object") {
+    return fallbackMessage
+  }
+
+  const payload = body as Record<string, unknown>
+  const error = payload.error
+  if (error && typeof error === "object") {
+    const message = (error as Record<string, unknown>).message
+    if (typeof message === "string" && message.trim()) {
+      return message
+    }
+  }
+
+  const message = payload.message
+  if (typeof message === "string" && message.trim()) {
+    return message
+  }
+
+  return fallbackMessage
+}
+
 function PixelForgeHome() {
   const auth = useAuth()
   const [presets, setPresets] = useState<StylePreset[]>([])
@@ -394,7 +433,7 @@ function PixelForgeHome() {
   const [selectedModel, setSelectedModel] = useState("")
   const [previewAssetId, setPreviewAssetId] = useState<string | null>(null)
   const [previewMetadata, setPreviewMetadata] = useState<Record<string, unknown> | null>(null)
-  const [loginEmail, setLoginEmail] = useState("")
+  const [loginIdentifier, setLoginIdentifier] = useState("")
   const [loginPassword, setLoginPassword] = useState("")
   const [subject, setSubject] = useState("magic forest potion")
   const [preset, setPreset] = useState("forest")
@@ -426,7 +465,6 @@ function PixelForgeHome() {
       return null
     }
     const payload = response.body as { data?: T; message?: string }
-    if (payload.message) setMessage(payload.message)
     return payload.data ?? null
   }
 
@@ -694,10 +732,10 @@ function PixelForgeHome() {
       method: "POST",
       url: "/api/v1/auth/login/",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email: loginEmail, password: loginPassword }),
+      body: JSON.stringify({ identifier: loginIdentifier, password: loginPassword }),
     })
     if (response.status >= 400) {
-      setMessage(`登入失敗 (${response.status})`)
+      setMessage(extractApiErrorMessage(response.body, `登入失敗 (${response.status})`))
       return
     }
     auth.captureFromResponse(response.body)
@@ -712,12 +750,12 @@ function PixelForgeHome() {
   if (!auth.isAuthenticated) {
     return (
       <PixelForgeLoginScreen
-        loginEmail={loginEmail}
+        loginIdentifier={loginIdentifier}
         loginPassword={loginPassword}
         message={message}
         title="像素遊戲資產生成工作台"
         description="請登入後開始建立風格一致的像素遊戲資產。"
-        onLoginEmailChange={setLoginEmail}
+        onLoginIdentifierChange={setLoginIdentifier}
         onLoginPasswordChange={setLoginPassword}
         onLogin={() => void login()}
       />
@@ -964,7 +1002,7 @@ function PixelForgeHome() {
                     <p className="font-semibold text-emerald-200">圖像來源 metadata</p>
                     <a
                       className="text-slate-400 underline hover:text-slate-200"
-                      href={previewAsset.origin_url}
+                      href={buildAssetViewerUrl(previewAsset.id, "origin", `${previewAsset.subject} 原圖`)}
                       target="_blank"
                       rel="noreferrer"
                     >
@@ -1088,7 +1126,7 @@ function PixelForgeAgentGenerationPage() {
   const auth = useAuth()
   const [sessions, setSessions] = useState<AgentGenerationSession[]>([])
   const [currentSession, setCurrentSession] = useState<AgentGenerationSession | null>(null)
-  const [loginEmail, setLoginEmail] = useState("")
+  const [loginIdentifier, setLoginIdentifier] = useState("")
   const [loginPassword, setLoginPassword] = useState("")
   const [message, setMessage] = useState("")
   const [chatInput, setChatInput] = useState("")
@@ -1113,7 +1151,6 @@ function PixelForgeAgentGenerationPage() {
       return null
     }
     const payload = response.body as { data?: T; message?: string }
-    if (payload.message) setMessage(payload.message)
     return payload.data ?? null
   }
 
@@ -1250,10 +1287,10 @@ function PixelForgeAgentGenerationPage() {
       method: "POST",
       url: "/api/v1/auth/login/",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email: loginEmail, password: loginPassword }),
+      body: JSON.stringify({ identifier: loginIdentifier, password: loginPassword }),
     })
     if (response.status >= 400) {
-      setMessage(`登入失敗 (${response.status})`)
+      setMessage(extractApiErrorMessage(response.body, `登入失敗 (${response.status})`))
       return
     }
     auth.captureFromResponse(response.body)
@@ -1268,12 +1305,12 @@ function PixelForgeAgentGenerationPage() {
   if (!auth.isAuthenticated) {
     return (
       <PixelForgeLoginScreen
-        loginEmail={loginEmail}
+        loginIdentifier={loginIdentifier}
         loginPassword={loginPassword}
         message={message}
         title="PixelForge Agent"
         description="登入後用聊天描述素材需求，Agent 會追問必要資訊並自動生成。"
-        onLoginEmailChange={setLoginEmail}
+        onLoginIdentifierChange={setLoginIdentifier}
         onLoginPasswordChange={setLoginPassword}
         onLogin={() => void login()}
       />
@@ -1287,7 +1324,12 @@ function PixelForgeAgentGenerationPage() {
   const currentMessages = currentSession?.messages ?? []
   const currentItems = currentSession?.items ?? []
   const manifestItems = currentSession?.manifest?.items ?? []
+  const completedAssetCount = currentSession
+    ? Number(currentSession.item_counts?.archived ?? currentItems.filter((item) => item.status === "ARCHIVED").length)
+    : 0
   const canCancel = currentSession && ["CHATTING", "PLANNING", "GENERATING"].includes(currentSession.status)
+  const canDownloadAll = !!currentSession && completedAssetCount > 0
+  const isAgentWorking = !!currentSession && ["PLANNING", "GENERATING"].includes(currentSession.status)
   const requirementsText = currentSession ? String(totalAssetCount(currentSession.asset_requirements) || "") : ""
   const canApprove = !!(
     currentSession
@@ -1323,7 +1365,6 @@ function PixelForgeAgentGenerationPage() {
           <div className="flex items-center justify-between gap-3">
             <div>
               <h2 className="font-bold text-lg">Agent Sessions</h2>
-              <p className="text-xs text-slate-400">依 latest-chat 排序</p>
             </div>
             <button
               className="rounded-lg bg-emerald-400 px-3 py-2 text-sm font-bold text-slate-950 hover:bg-emerald-300"
@@ -1367,14 +1408,24 @@ function PixelForgeAgentGenerationPage() {
                   {currentSession ? `${statusLabel} · Agent 會在資訊不足時追問` : "直接用自然語言描述，遊戲類型、視角、數量都可在聊天中補齊。"}
                 </p>
               </div>
-              {canCancel && (
-                <button
-                  className="rounded-lg bg-red-500/20 px-3 py-2 text-sm text-red-100 hover:bg-red-500/30"
-                  onClick={() => void cancelSession()}
-                >
-                  取消
-                </button>
-              )}
+              <div className="flex flex-wrap justify-end gap-2">
+                {canDownloadAll && (
+                  <a
+                    className="rounded-lg bg-emerald-400 px-3 py-2 text-sm font-bold text-slate-950 hover:bg-emerald-300"
+                    href={`/api/v1/agent-generation/sessions/${currentSession.id}/download/`}
+                  >
+                    下載全部
+                  </a>
+                )}
+                {canCancel && (
+                  <button
+                    className="rounded-lg bg-red-500/20 px-3 py-2 text-sm text-red-100 hover:bg-red-500/30"
+                    onClick={() => void cancelSession()}
+                  >
+                    取消
+                  </button>
+                )}
+              </div>
             </div>
             {message && <p className="mt-3 rounded-lg bg-white/10 p-3 text-sm text-slate-200">{message}</p>}
           </div>
@@ -1388,7 +1439,8 @@ function PixelForgeAgentGenerationPage() {
                   const messageKind = typeof messageMeta?.kind === "string" ? messageMeta.kind : ""
                   const planItems = asRecordArray(messageMeta?.items)
                   const resultAssets = asRecordArray(messageMeta?.assets)
-                  const isRichAssistant = !isUser && (messageKind === "generation_plan" || messageKind === "generation_result")
+                  const isResultMessage = messageKind === "generation_result" || messageKind === "generation_item_result"
+                  const isRichAssistant = !isUser && (messageKind === "generation_plan" || isResultMessage)
                   return (
                     <article key={chat.id} className={`flex ${isUser ? "justify-end" : "justify-start"}`}>
                       <div
@@ -1426,19 +1478,11 @@ function PixelForgeAgentGenerationPage() {
                             )}
                           </div>
                         )}
-                        {messageKind === "generation_result" && (
+                        {isResultMessage && (
                           <div className="mt-4 space-y-3">
-                            <div className="flex flex-wrap gap-2">
-                              <a
-                                className="rounded-lg bg-emerald-400 px-4 py-2 text-sm font-bold text-slate-950 hover:bg-emerald-300"
-                                href={typeof messageMeta?.download_all_url === "string" ? messageMeta.download_all_url : `/api/v1/agent-generation/sessions/${currentSession?.id}/download/`}
-                              >
-                                下載全部
-                              </a>
-                              <span className="self-center text-xs text-slate-400">
-                                已整理 {metadataText(messageMeta?.asset_count, String(resultAssets.length))} 個完成素材。
-                              </span>
-                            </div>
+                            <p className="text-xs text-slate-400">
+                              已整理 {metadataText(messageMeta?.asset_count, String(resultAssets.length))} 個完成素材。
+                            </p>
                             {!!resultAssets.length && (
                               <div className="grid gap-3 sm:grid-cols-2">
                                 {resultAssets.map((asset, index) => (
@@ -1457,20 +1501,28 @@ function PixelForgeAgentGenerationPage() {
                                     <p className="font-semibold">{metadataText(asset.name, `素材 ${index + 1}`)}</p>
                                     <p className="mt-1 text-xs text-slate-400">{metadataText(asset.subject)}</p>
                                     <div className="mt-3 flex flex-wrap gap-2">
-                                      {typeof asset.image_url === "string" && (
+                                      {typeof asset.asset_id === "string" && (
                                         <a
                                           className="rounded-md bg-white/10 px-3 py-2 text-sm hover:bg-white/20"
-                                          href={asset.image_url}
+                                          href={buildAssetViewerUrl(
+                                            asset.asset_id,
+                                            "image",
+                                            metadataText(asset.name, `素材 ${index + 1}`),
+                                          )}
                                           target="_blank"
                                           rel="noreferrer"
                                         >
                                           檢視
                                         </a>
                                       )}
-                                      {typeof asset.origin_url === "string" && (
+                                      {typeof asset.asset_id === "string" && (
                                         <a
                                           className="rounded-md bg-white/10 px-3 py-2 text-sm hover:bg-white/20"
-                                          href={asset.origin_url}
+                                          href={buildAssetViewerUrl(
+                                            asset.asset_id,
+                                            "origin",
+                                            `${metadataText(asset.name, `素材 ${index + 1}`)} 原圖`,
+                                          )}
                                           target="_blank"
                                           rel="noreferrer"
                                         >
@@ -1484,13 +1536,24 @@ function PixelForgeAgentGenerationPage() {
                             )}
                           </div>
                         )}
-                        <p className={`mt-2 text-[11px] ${isUser ? "text-slate-700" : "text-slate-500"}`}>
-                          {isUser ? "你" : "PixelForge Agent"}
-                        </p>
                       </div>
                     </article>
                   )
                 })}
+                {isAgentWorking && (
+                  <article className="flex justify-start">
+                    <div className="max-w-[78%] rounded-2xl border border-white/10 bg-slate-950 px-4 py-3 text-sm text-slate-100 shadow-lg">
+                      <div className="flex items-center gap-2">
+                        <span className="relative flex h-2 w-8 items-center justify-between">
+                          <span className="h-2 w-2 animate-pulse rounded-full bg-emerald-300" />
+                          <span className="h-2 w-2 animate-pulse rounded-full bg-emerald-300 [animation-delay:150ms]" />
+                          <span className="h-2 w-2 animate-pulse rounded-full bg-emerald-300 [animation-delay:300ms]" />
+                        </span>
+                        <span>{currentSession.status === "GENERATING" ? "Agent 正在生成素材…" : "Agent 正在理解需求…"}</span>
+                      </div>
+                    </div>
+                  </article>
+                )}
                 <div ref={messagesEndRef} />
               </div>
             ) : (
@@ -1546,10 +1609,6 @@ function PixelForgeAgentGenerationPage() {
                       />
                     </button>
                   </label>
-                  <div className="flex flex-wrap gap-2 text-xs text-slate-500">
-                    <span className="rounded-full bg-white/5 px-3 py-1">自動追問</span>
-                    <span className="rounded-full bg-white/5 px-3 py-1">處理後返工掃描</span>
-                  </div>
                 </div>
                 <div className="flex items-center gap-3">
                   <span className="text-xs text-slate-500">
@@ -1596,17 +1655,6 @@ function PixelForgeAgentGenerationPage() {
             <h2 className="font-bold text-lg">規劃與生成</h2>
             {currentSession ? (
               <div className="mt-4 space-y-4">
-                {!!currentSession.planning_steps.length && (
-                  <div className="grid gap-2">
-                    {currentSession.planning_steps.map((step) => (
-                      <div key={step.key} className="rounded-xl border border-emerald-300/20 bg-emerald-300/5 p-3">
-                        <p className="text-sm font-semibold text-emerald-200">{step.label}</p>
-                        <p className="text-xs text-slate-400">{step.status}</p>
-                      </div>
-                    ))}
-                  </div>
-                )}
-
                 {sessionStyle && (
                   <div className="rounded-xl border border-white/10 bg-slate-950 p-4">
                     <p className="font-semibold">{metadataText(sessionStyle.name, "Agent 風格")}</p>
@@ -1629,7 +1677,6 @@ function PixelForgeAgentGenerationPage() {
                     const itemLabel = AGENT_ITEM_STATUS_LABELS[item.status] ?? item.status
                     const isDone = item.status === "ARCHIVED"
                     const isFailed = item.status === "FAILED"
-                    const rework = asRecord(item.metadata?.agent_rework)
                     return (
                       <article key={item.id} className="rounded-xl border border-white/10 bg-slate-950 p-3">
                         {item.thumbnail_url ? (
@@ -1659,17 +1706,12 @@ function PixelForgeAgentGenerationPage() {
                             style={{ width: `${Math.min(Math.max(item.percent, isDone ? 100 : 0), 100)}%` }}
                           />
                         </div>
-                        {rework && (
-                          <p className="mt-2 rounded-lg bg-amber-400/10 p-2 text-xs text-amber-100">
-                            Agent 已觸發返工掃描：{metadataText(rework.method, "fallback")}
-                          </p>
-                        )}
                         {item.error && <p className="mt-2 text-sm text-red-300">{item.error}</p>}
                         <div className="mt-3 flex gap-2">
                           {item.asset_id && (
                             <a
                               className="rounded-md bg-white/10 px-3 py-2 text-sm hover:bg-white/20"
-                              href={`/api/v1/assets/${item.asset_id}/image/`}
+                              href={buildAssetViewerUrl(item.asset_id, "image", item.name)}
                               target="_blank"
                               rel="noreferrer"
                             >
@@ -1732,7 +1774,7 @@ function PixelForgeAgentGenerationPage() {
 function PixelForgeHistoryPage() {
   const auth = useAuth()
   const [historyJobs, setHistoryJobs] = useState<HistoryJob[]>([])
-  const [loginEmail, setLoginEmail] = useState("")
+  const [loginIdentifier, setLoginIdentifier] = useState("")
   const [loginPassword, setLoginPassword] = useState("")
   const [message, setMessage] = useState("")
   const [deletingJobId, setDeletingJobId] = useState<string | null>(null)
@@ -1795,10 +1837,10 @@ function PixelForgeHistoryPage() {
       method: "POST",
       url: "/api/v1/auth/login/",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email: loginEmail, password: loginPassword }),
+      body: JSON.stringify({ identifier: loginIdentifier, password: loginPassword }),
     })
     if (response.status >= 400) {
-      setMessage(`登入失敗 (${response.status})`)
+      setMessage(extractApiErrorMessage(response.body, `登入失敗 (${response.status})`))
       return
     }
     auth.captureFromResponse(response.body)
@@ -1813,12 +1855,12 @@ function PixelForgeHistoryPage() {
   if (!auth.isAuthenticated) {
     return (
       <PixelForgeLoginScreen
-        loginEmail={loginEmail}
+        loginIdentifier={loginIdentifier}
         loginPassword={loginPassword}
         message={message}
         title="PixelForge 任務歷史"
         description="登入後可查看歷史任務、縮圖與刪除已不需要的結果。"
-        onLoginEmailChange={setLoginEmail}
+        onLoginIdentifierChange={setLoginIdentifier}
         onLoginPasswordChange={setLoginPassword}
         onLogin={() => void login()}
       />
@@ -1918,6 +1960,16 @@ export default function App() {
       <ThemeProvider>
         <AuthProvider>
           <PaymentResultPage />
+        </AuthProvider>
+      </ThemeProvider>
+    )
+  }
+
+  if (window.location.pathname.startsWith("/image-viewer")) {
+    return (
+      <ThemeProvider>
+        <AuthProvider>
+          <ImageViewerPage />
         </AuthProvider>
       </ThemeProvider>
     )

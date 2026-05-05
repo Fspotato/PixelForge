@@ -46,6 +46,15 @@ export interface ApiResponse {
   duration: number
 }
 
+/** 二進位 API 回應包裝 */
+export interface BlobApiResponse {
+  status: number
+  statusText: string
+  headers: Record<string, string>
+  body: Blob
+  duration: number
+}
+
 /** sendRequest 的請求參數 */
 export interface RequestConfig {
   method: HttpMethod

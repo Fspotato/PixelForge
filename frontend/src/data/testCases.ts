@@ -250,13 +250,13 @@ export const testCases: TestCase[] = [
     name: "登入",
     method: "POST",
     path: "/api/v1/auth/login/",
-    description: "以 email + 密碼登入，成功後由後端寫入 HttpOnly cookie",
+    description: "以 email 或使用者名稱 + 密碼登入，成功後由後端寫入 HttpOnly cookie",
     requiresAuth: false,
     body: {
-      email: "admin@example.com",
+      identifier: "admin",
       password: "change-me",
     },
-    hint: "預設管理員帳號為 admin@example.com / change-me（需先透過 make dev 啟動環境）。登入成功後會建立 cookie session，前端不再保存 JWT。",
+    hint: "預設管理員可用 admin@example.com 或 admin 作為登入帳號，密碼為 change-me（需先透過 make dev 啟動環境）。登入成功後會建立 cookie session，前端不再保存 JWT。",
   },
   {
     id: "auth-google-login",

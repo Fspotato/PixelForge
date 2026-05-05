@@ -18,43 +18,43 @@ class BackgroundRemover(BaseProcessor):
     def process(self, image: Image.Image, **kwargs) -> Image.Image:
         source = image.convert("RGBA")
         method = str(kwargs.get("method", "subject"))
+        magenta_config = self._resolve_magenta_config(kwargs)
         if method in {"magenta", "chroma_key", "chroma-key"}:
-            return self._remove_magenta(
-                source,
-                threshold=int(kwargs.get("threshold", 100)),
-                edge_threshold=int(kwargs.get("edge_threshold", 150)),
-                shadow_threshold=int(kwargs.get("shadow_threshold", 230)),
-                shadow_component_ratio=float(kwargs.get("shadow_component_ratio", 0.06)),
-                keep_component_ratio=float(kwargs.get("keep_component_ratio", 0.02)),
-            )
+            return self._remove_magenta(source, **magenta_config)
         if method == "subject":
             processed = self._subject_separation(source, **kwargs)
             if processed is not None:
                 if self._has_magenta_background(source):
-                    return self._remove_magenta(
-                        processed,
-                        threshold=int(kwargs.get("threshold", 100)),
-                        edge_threshold=int(kwargs.get("edge_threshold", 150)),
-                        shadow_threshold=int(kwargs.get("shadow_threshold", 230)),
-                        shadow_component_ratio=float(kwargs.get("shadow_component_ratio", 0.06)),
-                        keep_component_ratio=float(kwargs.get("keep_component_ratio", 0.02)),
-                    )
+                    return self._remove_magenta(processed, **magenta_config)
                 return processed
             if self._has_magenta_background(source):
-                return self._remove_magenta(
-                    source,
-                    threshold=int(kwargs.get("threshold", 100)),
-                    edge_threshold=int(kwargs.get("edge_threshold", 150)),
-                    shadow_threshold=int(kwargs.get("shadow_threshold", 230)),
-                    shadow_component_ratio=float(kwargs.get("shadow_component_ratio", 0.06)),
-                    keep_component_ratio=float(kwargs.get("keep_component_ratio", 0.02)),
-                )
+                return self._remove_magenta(source, **magenta_config)
             method = "flood_fill"
         if method == "flood_fill":
             processed = self._flood_fill(source, **kwargs)
             if processed is not None:
                 return processed
         return self._threshold_remove(source, int(kwargs.get("threshold", 245)))
+
+    @staticmethod
+    def _resolve_magenta_config(kwargs: dict) -> dict[str, int | float]:
+        tolerance = max(4, int(kwargs.get("tolerance", 18)))
+        threshold = int(kwargs.get("threshold", min(180, max(84, 72 + tolerance * 3))))
+        edge_threshold = int(
+            kwargs.get("edge_threshold", min(220, max(threshold + 18, 120 + tolerance * 3)))
+        )
+        shadow_threshold = int(
+            kwargs.get("shadow_threshold", min(255, max(edge_threshold + 24, 180 + tolerance * 3)))
+        )
+        return {
+            "tolerance": tolerance,
+            "threshold": threshold,
+            "edge_threshold": edge_threshold,
+            "shadow_threshold": shadow_threshold,
+            "shadow_component_ratio": float(kwargs.get("shadow_component_ratio", 0.06)),
+            "keep_component_ratio": float(kwargs.get("keep_component_ratio", 0.02)),
+            "seed_count": int(kwargs.get("seed_count", 9)),
+        }
 
     def _subject_separation(self, image: Image.Image, **kwargs) -> Image.Image | None:
         data = np.array(image, dtype=np.uint8)
@@ -126,33 +126,47 @@ class BackgroundRemover(BaseProcessor):
     def _remove_magenta(
         image: Image.Image,
         *,
+        tolerance: int,
         threshold: int,
         edge_threshold: int,
         shadow_threshold: int,
         shadow_component_ratio: float,
         keep_component_ratio: float,
+        seed_count: int,
     ) -> Image.Image:
         data = np.array(image.convert("RGBA"), dtype=np.uint8)
-        rgb = data[:, :, :3].astype(np.int32)
+        rgb = data[:, :, :3]
+        rgb_i = rgb.astype(np.int32)
         alpha = data[:, :, 3] > 0
         magenta = np.array([255, 0, 255], dtype=np.int32)
-        distance = np.sqrt(np.sum((rgb - magenta) ** 2, axis=2))
-
-        direct_mask = (distance < threshold) & alpha
-        data[:, :, 3][direct_mask] = 0
+        distance = np.sqrt(np.sum((rgb_i - magenta) ** 2, axis=2))
 
         height, width = data.shape[:2]
         edge_mask = np.zeros((height, width), dtype=np.uint8)
-        magenta_shadow = BackgroundRemover._magenta_shadow_mask(
+        edge_background = BackgroundRemover._edge_background_mask(
             rgb,
+            tolerance=tolerance,
+            seed_count=seed_count,
+        ) & alpha
+        magenta_shadow = BackgroundRemover._magenta_shadow_mask(
+            rgb_i,
             alpha,
             max_distance=shadow_threshold,
         )
+        subject_guard = BackgroundRemover._subject_guard_from_non_background(
+            alpha=alpha,
+            background_seed=edge_background,
+            magenta_shadow=magenta_shadow,
+            keep_ratio=keep_component_ratio,
+        )
         seed = (
-            (distance < edge_threshold)
-            | magenta_shadow
-            | (data[:, :, 3] == 0)
-        ).astype(np.uint8)
+            (edge_background | ((distance < edge_threshold) & alpha) | magenta_shadow)
+            & ~subject_guard
+        ) | (
+            (data[:, :, 3] == 0)
+            & ~subject_guard
+        )
+        seed = seed.astype(np.uint8)
         queue = []
         for x in range(width):
             queue.append((x, 0))
@@ -182,6 +196,10 @@ class BackgroundRemover(BaseProcessor):
             )
 
         data[:, :, 3][edge_mask > 0] = 0
+        direct_mask = (
+            ((distance < threshold) | edge_background | magenta_shadow) & alpha & ~subject_guard
+        )
+        data[:, :, 3][BackgroundRemover._enclosed_background_holes(direct_mask, edge_mask > 0)] = 0
         data = BackgroundRemover._remove_detached_magenta_artifacts(
             data,
             magenta_shadow,
@@ -193,6 +211,137 @@ class BackgroundRemover(BaseProcessor):
         )
         data[data[:, :, 3] == 0] = [0, 0, 0, 0]
         return Image.fromarray(data, "RGBA")
+
+    @staticmethod
+    def _enclosed_background_holes(
+        candidate: np.ndarray,
+        edge_background: np.ndarray,
+    ) -> np.ndarray:
+        """只補掉被背景包圍的小孔，保留主體內部的品紅色圖案。"""
+        holes = candidate & ~edge_background
+        if not np.any(holes):
+            return holes
+
+        num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(
+            holes.astype(np.uint8),
+            connectivity=8,
+        )
+        if num_labels <= 1:
+            return holes
+
+        background_context = cv2.dilate(
+            edge_background.astype(np.uint8),
+            np.ones((3, 3), dtype=np.uint8),
+            iterations=1,
+        ).astype(bool)
+        remove = np.zeros_like(holes, dtype=bool)
+        for label_id in range(1, num_labels):
+            component = labels == label_id
+            area = int(stats[label_id, cv2.CC_STAT_AREA])
+            if area > max(32, int(candidate.size * 0.002)):
+                continue
+            border = cv2.dilate(
+                component.astype(np.uint8),
+                np.ones((3, 3), dtype=np.uint8),
+                iterations=1,
+            ).astype(bool) & ~component
+            if np.any(border & background_context):
+                remove |= component
+        return remove
+
+    @staticmethod
+    def _subject_guard_from_non_background(
+        *,
+        alpha: np.ndarray,
+        background_seed: np.ndarray,
+        magenta_shadow: np.ndarray,
+        keep_ratio: float,
+    ) -> np.ndarray:
+        """用非邊界背景的主體色建立保護區，避免背景 flood-fill 挖掉主體。"""
+        core = alpha & ~background_seed & ~magenta_shadow
+        core = BackgroundRemover._keep_interior_components(core, keep_ratio=keep_ratio)
+        if not np.any(core):
+            return core
+
+        kernel = np.ones((5, 5), dtype=np.uint8)
+        mask = cv2.morphologyEx(core.astype(np.uint8), cv2.MORPH_CLOSE, kernel, iterations=2)
+        mask = cv2.dilate(mask, np.ones((3, 3), dtype=np.uint8), iterations=1).astype(bool)
+        mask = BackgroundRemover._fill_mask_holes(mask) & alpha
+        return mask
+
+    @staticmethod
+    def _keep_interior_components(mask: np.ndarray, *, keep_ratio: float) -> np.ndarray:
+        num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(
+            mask.astype(np.uint8),
+            connectivity=8,
+        )
+        if num_labels <= 1:
+            return mask
+
+        areas = stats[1:, cv2.CC_STAT_AREA]
+        largest_area = int(areas.max())
+        area_threshold = max(16, int(largest_area * keep_ratio))
+        height, width = mask.shape
+        kept = np.zeros_like(mask, dtype=bool)
+        for label_id in range(1, num_labels):
+            area = int(stats[label_id, cv2.CC_STAT_AREA])
+            if area < area_threshold:
+                continue
+            if BackgroundRemover._component_touches_edge(
+                stats[label_id],
+                width=width,
+                height=height,
+            ):
+                continue
+            kept |= labels == label_id
+        if np.any(kept):
+            return kept
+        return BackgroundRemover._keep_mask_significant_components(mask, keep_ratio=keep_ratio)
+
+    @staticmethod
+    def _keep_mask_significant_components(mask: np.ndarray, *, keep_ratio: float) -> np.ndarray:
+        num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(
+            mask.astype(np.uint8),
+            connectivity=8,
+        )
+        if num_labels <= 1:
+            return mask
+        areas = stats[1:, cv2.CC_STAT_AREA]
+        largest_area = int(areas.max())
+        area_threshold = max(16, int(largest_area * keep_ratio))
+        kept = np.zeros_like(mask, dtype=bool)
+        for label_id in range(1, num_labels):
+            if int(stats[label_id, cv2.CC_STAT_AREA]) >= area_threshold:
+                kept |= labels == label_id
+        return kept
+
+    @staticmethod
+    def _component_touches_edge(
+        stats_row: np.ndarray,
+        *,
+        width: int,
+        height: int,
+    ) -> bool:
+        left = int(stats_row[cv2.CC_STAT_LEFT])
+        top = int(stats_row[cv2.CC_STAT_TOP])
+        component_width = int(stats_row[cv2.CC_STAT_WIDTH])
+        component_height = int(stats_row[cv2.CC_STAT_HEIGHT])
+        return (
+            left <= 0
+            or top <= 0
+            or left + component_width >= width
+            or top + component_height >= height
+        )
+
+    @staticmethod
+    def _fill_mask_holes(mask: np.ndarray) -> np.ndarray:
+        inverted = (~mask).astype(np.uint8)
+        height, width = inverted.shape
+        flood = inverted.copy()
+        fill_mask = np.zeros((height + 2, width + 2), dtype=np.uint8)
+        cv2.floodFill(flood, fill_mask, (0, 0), 0)
+        holes = flood.astype(bool)
+        return mask | holes
 
     @staticmethod
     def _magenta_shadow_mask(

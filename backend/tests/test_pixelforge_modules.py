@@ -7,11 +7,13 @@ import io
 import json
 import zipfile
 from types import SimpleNamespace
+from uuid import uuid4
 
 import pytest
 from django.contrib.auth import get_user_model
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import override_settings
+from django.utils import timezone
 from PIL import Image
 from rest_framework import status
 from rest_framework.test import APIClient
@@ -26,7 +28,10 @@ from modules.agent_generation.models import (
     AgentGenerationItem,
     AgentGenerationMessage,
     AgentGenerationSession,
+    AgentItemStatus,
+    AgentSessionStatus,
 )
+from modules.agent_generation.services import AgentGenerationService
 from modules.asset_library.models import Asset
 from modules.asset_library.services import AssetLibraryService
 from modules.generation_jobs.models import GenerationJob
@@ -97,6 +102,26 @@ def _near_magenta_subject_png() -> bytes:
     return buffer.getvalue()
 
 
+def _pink_gradient_subject_image() -> Image.Image:
+    image = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
+    for y in range(64):
+        for x in range(64):
+            red = 212 + (x * 18) // 63
+            green = 36 + (y * 16) // 63
+            blue = 118 + ((x + y) * 24) // 126
+            image.putpixel((x, y), (red, green, blue, 255))
+    for y in range(18, 46):
+        for x in range(20, 44):
+            image.putpixel((x, y), (30, 180, 70, 255))
+    return image
+
+
+def _pink_gradient_subject_png() -> bytes:
+    buffer = io.BytesIO()
+    _pink_gradient_subject_image().save(buffer, format="PNG")
+    return buffer.getvalue()
+
+
 def _agent_context_response(ready: bool = True) -> SimpleNamespace:
     payload = {
         "ready": ready,
@@ -162,6 +187,224 @@ def _agent_manifest_response() -> SimpleNamespace:
         model="test-chat-model",
         is_fallback=False,
     )
+
+
+@pytest.mark.django_db
+def test_agent_conversation_preserves_requested_asset_count_when_requirements_are_wrong():
+    user = _active_user("agent-count@example.com")
+    session = AgentGenerationSession.objects.create(
+        user=user,
+        brief=(
+            "我想生成一個Q版人物2D平台跳躍遊戲 風格是8-bit + 賽博風格 "
+            "主角是一個愛打遊戲的少女 主要敵人是一些傳統遊戲會出現的人物 "
+            "pac-man 貪吃蛇等 還需要一些有特色的場景物件"
+        ),
+        latest_chat_at=timezone.now(),
+    )
+    payload = {
+        "ready": True,
+        "reply": "資訊足夠，我會開始規劃素材。",
+        "missing": [],
+        "fields": {
+            "brief": session.brief,
+            "output_name": "8-bit賽博Q版平台跳躍素材包",
+            "game_genre": "2D平台跳躍",
+            "camera_view": "side-view",
+            "asset_count": 15,
+            "asset_requirements": {"props": 1},
+        },
+    }
+
+    result = AgentGenerationService._normalize_conversation_state(payload, session=session)
+    requirements = result["context"]["asset_requirements"]
+
+    assert result["ready"] is True
+    assert result["context"]["asset_count"] == 15
+    assert sum(requirements.values()) == 15
+    assert requirements["characters"] == 1
+    assert requirements["enemies"] >= 1
+    assert requirements["environment_props"] >= 1
+
+
+@pytest.mark.django_db
+def test_agent_conversation_uses_generic_genre_for_clear_single_asset_request():
+    user = _active_user("agent-generic-genre@example.com")
+    session = AgentGenerationSession.objects.create(
+        user=user,
+        brief="建立 side-view 8-bit cyber 小素材，只生成 1 個安全的發光能量晶片收集物。",
+        latest_chat_at=timezone.now(),
+    )
+    payload = {
+        "ready": True,
+        "reply": "資訊足夠，我會開始規劃素材。",
+        "missing": ["game_genre"],
+        "fields": {
+            "brief": session.brief,
+            "output_name": "Energy Chip",
+            "camera_view": "side-view",
+            "asset_count": 1,
+        },
+    }
+
+    result = AgentGenerationService._normalize_conversation_state(payload, session=session)
+
+    assert result["ready"] is True
+    assert result["missing"] == []
+    assert result["context"]["game_genre"] == "game asset"
+
+
+def test_agent_generation_subject_uses_full_prompt_brief():
+    item = AgentGenerationItem(
+        name="電玩少女主角",
+        subject="chibi gamer girl",
+        prompt_brief=(
+            "Single centered 2D pixel-art game asset of a chibi gamer girl hero in side view, "
+            "8-bit cyber style, oversized hoodie, mini cyber headphones, game-themed wrist "
+            "device, sporty shoes, cute confident expression"
+        ),
+    )
+
+    subject = AgentGenerationService._generation_subject_for_item(item)
+
+    assert subject.startswith("電玩少女主角:")
+    assert "mini cyber headphones" in subject
+    assert "game-themed wrist device" in subject
+
+
+@pytest.mark.django_db
+def test_agent_refresh_completed_assets_does_not_replan(monkeypatch):
+    user = _active_user("agent-refresh@example.com")
+    session = AgentGenerationSession.objects.create(
+        user=user,
+        status=AgentSessionStatus.PARTIAL,
+        brief="已完成的素材包",
+        output_name="RefreshPack",
+        context={"asset_count": 1, "game_genre": "platformer", "camera_view": "side-view"},
+        manifest={"items": [{"name": "Done Asset"}]},
+        latest_chat_at=timezone.now(),
+    )
+    AgentGenerationItem.objects.create(
+        session=session,
+        status=AgentItemStatus.ARCHIVED,
+        category="props",
+        name="Done Asset",
+        subject="done asset",
+        asset_type="prop",
+        sort_order=1,
+        metadata={"asset_id": str(uuid4())},
+    )
+    monkeypatch.setattr(
+        AgentGenerationService,
+        "enqueue_orchestration",
+        lambda *_args, **_kwargs: None,
+    )
+
+    AgentGenerationService.add_message(
+        user=user,
+        session_id=session.id,
+        message="刷新已完成的素材",
+    )
+    AgentGenerationService.process_session(session_id=session.id)
+    session.refresh_from_db()
+    latest_message = session.messages.order_by("-created_at").first()
+
+    assert session.status == AgentSessionStatus.CHATTING
+    assert session.manifest["items"][0]["name"] == "Done Asset"
+    assert latest_message.metadata["action"] == "refresh_completed_assets"
+    assert not session.messages.filter(metadata__kind="generation_plan").exists()
+
+
+@pytest.mark.django_db
+def test_agent_sync_announces_each_completed_item_as_streaming_result():
+    StylePresetService.sync_templates()
+    user = _active_user("agent-stream@example.com")
+    preset = StylePreset.objects.get(key="forest")
+    session = AgentGenerationSession.objects.create(
+        user=user,
+        status=AgentSessionStatus.GENERATING,
+        output_name="StreamPack",
+        preset=preset,
+        latest_chat_at=timezone.now(),
+    )
+    job = GenerationJob.objects.create(
+        user=user,
+        preset=preset,
+        subject="streaming crystal",
+        status=ForgeJobStatus.ARCHIVED,
+        percent=100,
+        result_asset_id=uuid4(),
+    )
+    item = AgentGenerationItem.objects.create(
+        session=session,
+        generation_job=job,
+        status=AgentItemStatus.GENERATING,
+        category="props",
+        name="Streaming Crystal",
+        subject="streaming crystal",
+        asset_type="prop",
+        sort_order=1,
+    )
+
+    AgentGenerationService.sync_session(session)
+    item.refresh_from_db()
+    result_message = session.messages.get(metadata__kind="generation_item_result")
+
+    session.refresh_from_db()
+    assert item.status == AgentItemStatus.ARCHIVED
+    assert session.status == AgentSessionStatus.COMPLETED
+    assert item.metadata["result_announced_at"]
+    assert result_message.metadata["assets"][0]["name"] == "Streaming Crystal"
+    assert not session.messages.filter(metadata__kind="generation_result").exists()
+
+
+@pytest.mark.django_db
+def test_agent_sync_auto_retries_retriable_generation_errors(monkeypatch):
+    StylePresetService.sync_templates()
+    user = _active_user("agent-auto-retry@example.com")
+    preset = StylePreset.objects.get(key="forest")
+    session = AgentGenerationSession.objects.create(
+        user=user,
+        status=AgentSessionStatus.GENERATING,
+        output_name="RetryPack",
+        preset=preset,
+        max_retry_per_item=3,
+        latest_chat_at=timezone.now(),
+    )
+    failed_job = GenerationJob.objects.create(
+        user=user,
+        preset=preset,
+        subject="rate limited item",
+        status=ForgeJobStatus.FAILED,
+        error="FLUX 圖像生成失敗 (429): RateLimitReached",
+    )
+    item = AgentGenerationItem.objects.create(
+        session=session,
+        generation_job=failed_job,
+        status=AgentItemStatus.GENERATING,
+        category="props",
+        name="Retry Crystal",
+        subject="retry crystal",
+        asset_type="prop",
+        prompt_brief="Safe retry crystal.",
+        sort_order=1,
+    )
+    scheduled = []
+
+    monkeypatch.setattr(
+        "modules.generation_jobs.tasks.generate_asset_task.apply_async",
+        lambda args, countdown: scheduled.append((args, countdown))
+        or SimpleNamespace(id="auto-retry-task"),
+    )
+
+    AgentGenerationService.sync_session(session)
+    item.refresh_from_db()
+    session.refresh_from_db()
+
+    assert session.status == AgentSessionStatus.GENERATING
+    assert item.status == AgentItemStatus.QUEUED
+    assert item.retry_count == 1
+    assert scheduled and scheduled[0][1] >= 30
+    assert session.messages.filter(metadata__action="auto_retry").exists()
 
 
 @pytest.mark.django_db
@@ -325,6 +568,38 @@ def test_background_remover_removes_magenta_chroma_key():
     assert result.image.getpixel((16, 16))[3] == 255
 
 
+def test_background_remover_preserves_internal_magenta_details():
+    image = Image.new("RGBA", (48, 48), (255, 0, 255, 255))
+    for y in range(12, 36):
+        for x in range(12, 36):
+            image.putpixel((x, y), (40, 180, 80, 255))
+    for y in range(20, 28):
+        for x in range(20, 28):
+            image.putpixel((x, y), (255, 0, 255, 255))
+
+    result = ImagePipeline(["bg_remover"]).run(
+        image,
+        processor_config={"bg_remover": {"method": "magenta"}},
+        continue_on_error=False,
+    )
+
+    assert result.image.getpixel((0, 0))[3] == 0
+    assert result.image.getpixel((16, 16))[3] == 255
+    assert result.image.getpixel((24, 24))[3] == 255
+
+
+def test_background_remover_removes_pink_gradient_background():
+    result = ImagePipeline(["bg_remover"]).run(
+        _pink_gradient_subject_image(),
+        processor_config={"bg_remover": {"method": "magenta", "tolerance": 18}},
+        continue_on_error=False,
+    )
+
+    assert result.image.getpixel((0, 0))[3] == 0
+    assert result.image.getpixel((63, 63))[3] == 0
+    assert result.image.getpixel((32, 32))[3] == 255
+
+
 def test_background_remover_cleans_dark_magenta_shadow_artifacts():
     image = Image.new("RGBA", (64, 64), (255, 0, 255, 255))
     for y in range(22, 38):
@@ -404,6 +679,15 @@ def test_prompt_qc_evaluator_rejects_edge_touch_and_accepts_center_subject():
     assert bad_qc["qc_pass"] is False
     assert "foreground_too_large" in bad_qc["hard_failures"]
     assert good_qc["qc_pass"] is True
+
+
+def test_scan_processed_subject_marks_opaque_edges_for_rework():
+    scan = GenerationJobService._scan_processed_subject(_pink_gradient_subject_image())
+
+    assert scan["needs_rework"] is True
+    assert scan["reason"] == "processed_background_not_removed"
+    assert scan["touches_edge"] is True
+    assert scan["edge_visible_ratio"] == 1.0
 
 
 def test_perfect_pixel_supports_size_options_and_no_compression():
@@ -664,8 +948,11 @@ def test_agent_generation_manual_plan_requires_explicit_approve(monkeypatch, tmp
     assert approve_response.data["data"]["status"] == "COMPLETED"
     assert approve_response.data["data"]["item_counts"]["archived"] == 1
     result_message = approve_response.data["data"]["messages"][-1]
-    assert result_message["metadata"]["kind"] == "generation_result"
-    assert result_message["metadata"]["download_all_url"].endswith("/download/")
+    assert result_message["metadata"]["kind"] == "generation_item_result"
+    assert not any(
+        message.get("metadata", {}).get("kind") == "generation_result"
+        for message in approve_response.data["data"]["messages"]
+    )
 
     download_response = client.get(f"/api/v1/agent-generation/sessions/{session_id}/download/")
     assert download_response.status_code == status.HTTP_200_OK
@@ -746,7 +1033,86 @@ def test_agent_generation_manual_approval_runs_admin_batch(monkeypatch, tmp_path
     ).exists()
     assert AgentGenerationMessage.objects.filter(session_id=session_id, role="user").exists()
     assert GenerationJob.objects.filter(user=admin, status=ForgeJobStatus.ARCHIVED).exists()
-    assert Asset.objects.filter(user=admin, subject="glowing arcane crystal resource node").exists()
+    assert Asset.objects.filter(
+        user=admin,
+        subject__contains="Safe glowing crystal node for top-down survival crafting.",
+    ).exists()
+
+
+@pytest.mark.django_db
+@override_settings(MEDIA_ROOT="")
+def test_agent_generation_completed_session_accepts_followup_round(monkeypatch, tmp_path, settings):
+    settings.MEDIA_ROOT = tmp_path
+    StylePresetService.sync_templates()
+    admin = User.objects.create_superuser(
+        email="admin-agent-followup@example.com",
+        password="adminpass123",
+        is_active=True,
+        status="active",
+    )
+    client = APIClient()
+    client.force_authenticate(user=admin)
+    encoded = base64.b64encode(_magenta_subject_png()).decode("ascii")
+
+    def chat_stub(_self, request, **_kwargs):
+        system_prompt = request.messages[0].content
+        if "Conversation Orchestrator" in system_prompt:
+            return _agent_context_response()
+        if "Asset Pack Planner" in system_prompt:
+            return _agent_manifest_response()
+        return _planner_response("glowing arcane crystal resource node")
+
+    monkeypatch.setattr("core.ai_providers.services.AIProviderService.chat", chat_stub)
+    monkeypatch.setattr(
+        "core.ai_providers.services.AIProviderService.generate_image",
+        lambda *_args, **_kwargs: SimpleNamespace(images=[{"b64_json": encoded}]),
+    )
+
+    def run_task_immediately(job_id):
+        GenerationJobService.execute_generation(job_id)
+        return SimpleNamespace(id="agent-followup-task-id")
+
+    monkeypatch.setattr(
+        "modules.generation_jobs.tasks.generate_asset_task.delay",
+        run_task_immediately,
+    )
+
+    create_response = client.post(
+        "/api/v1/agent-generation/sessions/",
+        {
+            "message": (
+                "建立一個安全的魔法工坊素材包，survival crafting，top-down，先產出 1 個水晶資源。"
+            ),
+        },
+        format="json",
+    )
+    session_id = create_response.data["data"]["id"]
+
+    assert create_response.status_code == status.HTTP_201_CREATED
+    assert create_response.data["data"]["status"] == "COMPLETED"
+    assert create_response.data["data"]["item_counts"]["archived"] == 1
+
+    followup_response = client.post(
+        f"/api/v1/agent-generation/sessions/{session_id}/messages/",
+        {"message": "上一輪完成後，請在同一個對話再補一個同風格素材。"},
+        format="json",
+    )
+
+    assert followup_response.status_code == status.HTTP_200_OK
+    assert followup_response.data["data"]["id"] == session_id
+    assert followup_response.data["data"]["status"] == "COMPLETED"
+    assert followup_response.data["data"]["item_counts"]["archived"] == 2
+    assert len(followup_response.data["data"]["items"]) == 2
+    assert AgentGenerationItem.objects.filter(
+        session_id=session_id,
+        generation_job__status=ForgeJobStatus.ARCHIVED,
+    ).count() == 2
+    assert GenerationJob.objects.filter(user=admin, status=ForgeJobStatus.ARCHIVED).count() == 2
+    assert all("upscaler" in job.processors for job in GenerationJob.objects.filter(user=admin))
+    assert all(
+        (job.processor_config or {}).get("upscaler", {}).get("scale") == 10
+        for job in GenerationJob.objects.filter(user=admin)
+    )
 
 
 @pytest.mark.django_db
@@ -840,6 +1206,49 @@ def test_agent_generation_reworks_after_processor_removes_magenta_subject(
     assert job.metadata["agent_rework"]["before"]["needs_rework"] is True
     assert job.metadata["agent_rework"]["after"]["needs_rework"] is False
 
+
+@pytest.mark.django_db
+@override_settings(MEDIA_ROOT="")
+def test_agent_generation_removes_pink_gradient_background(monkeypatch, tmp_path, settings):
+    settings.MEDIA_ROOT = tmp_path
+    StylePresetService.sync_templates()
+    user = _active_user("agent-gradient-bg@example.com")
+    preset = StylePreset.objects.get(key="forest")
+    monkeypatch.setattr(
+        "core.ai_providers.services.AIProviderService.chat",
+        lambda *_args, **_kwargs: _planner_response("gradient herb bundle"),
+    )
+    monkeypatch.setattr(
+        GenerationJobService,
+        "_generate_image_candidates",
+        staticmethod(lambda *_args, **_kwargs: [_pink_gradient_subject_png()]),
+    )
+    job = GenerationJobService.create_job(
+        user=user,
+        subject="gradient herb bundle",
+        preset=preset,
+        view="top-down",
+        mode="single",
+        processors=["bg_remover", "perfect_pixel", "upscaler"],
+        processor_config={
+            "bg_remover": {"method": "magenta", "tolerance": 18},
+            "perfect_pixel": {"target_size": "none", "sample_method": "center"},
+            "upscaler": {"scale": 10},
+        },
+        enqueue=False,
+    )
+    metadata = dict(job.metadata or {})
+    metadata["agent_generation"] = {"session_id": "test-session", "item_id": "test-item"}
+    job.metadata = metadata
+    job.save(update_fields=["metadata", "updated_at"])
+
+    GenerationJobService.execute_generation(str(job.id))
+    job.refresh_from_db()
+
+    assert job.status == ForgeJobStatus.ARCHIVED
+    processed = Image.open(tmp_path / job.processed_file.storage_path).convert("RGBA")
+    assert processed.getpixel((0, 0))[3] == 0
+    assert processed.getpixel((processed.width // 2, processed.height // 2))[3] == 255
 
 @pytest.mark.django_db
 @override_settings(MEDIA_ROOT="")

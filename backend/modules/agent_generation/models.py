@@ -62,7 +62,7 @@ class AgentGenerationSession(BaseModel):
     style_mode = models.CharField(max_length=20, default="agent", verbose_name="風格模式")
     auto_generate = models.BooleanField(default=True, verbose_name="自動生成")
     max_retry_per_item = models.PositiveSmallIntegerField(
-        default=2, verbose_name="項目最大重試次數"
+        default=3, verbose_name="項目最大重試次數"
     )
     preset = models.ForeignKey(
         "style_presets.StylePreset",

@@ -8,6 +8,7 @@ import pytest
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.contrib.auth.backends import ModelBackend
+from django.core.cache import cache
 from django.test import RequestFactory
 from rest_framework import status
 from rest_framework.test import APIClient
@@ -45,9 +46,13 @@ User = get_user_model()
 
 
 class TestLoginSerializerFields:
-    """測試 LoginSerializer 有 email 和 password 欄位。"""
+    """測試 LoginSerializer 欄位與相容格式。"""
 
-    def test_has_email_field(self):
+    def test_has_identifier_field(self):
+        serializer = LoginSerializer()
+        assert "identifier" in serializer.fields
+
+    def test_has_email_alias_field(self):
         serializer = LoginSerializer()
         assert "email" in serializer.fields
 
@@ -57,7 +62,14 @@ class TestLoginSerializerFields:
 
     def test_field_count(self):
         serializer = LoginSerializer()
-        assert set(serializer.fields.keys()) == {"email", "password"}
+        assert set(serializer.fields.keys()) == {"identifier", "email", "password"}
+
+    def test_accepts_legacy_email_field(self):
+        serializer = LoginSerializer(
+            data={"email": "legacy@example.com", "password": "testpass123"}
+        )
+        assert serializer.is_valid()
+        assert serializer.validated_data["identifier"] == "legacy@example.com"
 
 
 # ---------------------------------------------------------------------------
@@ -407,6 +419,28 @@ class TestEmailBackendStructure:
         assert callable(EmailBackend.authenticate)
 
 
+@pytest.mark.django_db
+class TestEmailBackendAuthentication:
+    """測試 EmailBackend 支援 Django admin 傳入的 username 參數。"""
+
+    def test_authenticate_accepts_username_kwarg(self):
+        user = User.objects.create_user(
+            email="backend-admin@example.com",
+            password="strongpass123",
+            username="backend-admin",
+            is_active=True,
+            status="active",
+        )
+
+        authenticated = EmailBackend().authenticate(
+            request=None,
+            username=user.username,
+            password="strongpass123",
+        )
+
+        assert authenticated == user
+
+
 # ---------------------------------------------------------------------------
 # TokenService 方法存在性
 # ---------------------------------------------------------------------------
@@ -432,6 +466,10 @@ class TestTokenServiceMethodsExist:
 class TestCookieAuthFlow:
     """測試 JWT HttpOnly cookie 登入流程。"""
 
+    @pytest.fixture(autouse=True)
+    def clear_throttle_cache(self):
+        cache.clear()
+
     @pytest.fixture
     def api_client(self) -> APIClient:
         return APIClient()
@@ -449,7 +487,7 @@ class TestCookieAuthFlow:
         response = api_client.post(
             "/api/v1/auth/login/",
             {
-                "email": user.email,
+                "identifier": user.email,
                 "password": "strongpass123",
             },
             format="json",
@@ -464,11 +502,37 @@ class TestCookieAuthFlow:
         assert response.cookies[settings.JWT_AUTH_COOKIE]["httponly"]
         assert response.cookies[settings.JWT_REFRESH_COOKIE]["httponly"]
 
+    def test_login_accepts_username_identifier(self, api_client: APIClient, user):
+        response = api_client.post(
+            "/api/v1/auth/login/",
+            {
+                "identifier": user.username,
+                "password": "strongpass123",
+            },
+            format="json",
+        )
+
+        assert response.status_code == status.HTTP_200_OK
+        assert response.data["data"]["user"]["username"] == user.username
+
+    def test_login_returns_complete_invalid_credentials_message(self, api_client: APIClient, user):
+        response = api_client.post(
+            "/api/v1/auth/login/",
+            {
+                "identifier": user.username,
+                "password": "wrong-password",
+            },
+            format="json",
+        )
+
+        assert response.status_code == status.HTTP_401_UNAUTHORIZED
+        assert response.data["error"]["message"] == "帳號或密碼錯誤"
+
     def test_cookie_authenticated_request_can_access_me(self, api_client: APIClient, user):
         login_response = api_client.post(
             "/api/v1/auth/login/",
             {
-                "email": user.email,
+                "identifier": user.email,
                 "password": "strongpass123",
             },
             format="json",
@@ -486,7 +550,7 @@ class TestCookieAuthFlow:
         login_response = api_client.post(
             "/api/v1/auth/login/",
             {
-                "email": user.email,
+                "identifier": user.email,
                 "password": "strongpass123",
             },
             format="json",
@@ -510,7 +574,7 @@ class TestCookieAuthFlow:
         login_response = api_client.post(
             "/api/v1/auth/login/",
             {
-                "email": user.email,
+                "identifier": user.email,
                 "password": "strongpass123",
             },
             format="json",
@@ -533,7 +597,7 @@ class TestCookieAuthFlow:
         login_response = api_client.post(
             "/api/v1/auth/login/",
             {
-                "email": user.email,
+                "identifier": user.email,
                 "password": "strongpass123",
             },
             format="json",

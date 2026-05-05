@@ -17,6 +17,13 @@ from django.db.migrations.exceptions import InconsistentMigrationHistory  # noqa
 from django.db.utils import DatabaseError  # noqa: E402
 
 
+def _get_target_username(email: str) -> str:
+    explicit_username = os.getenv("DJANGO_SUPERUSER_USERNAME", "").strip()
+    if explicit_username:
+        return explicit_username
+    return email.partition("@")[0].strip().lower() or "admin"
+
+
 def _create_dev_superuser() -> None:
     """在 dev 環境建立或恢復超級使用者帳號。"""
 
@@ -29,23 +36,39 @@ def _create_dev_superuser() -> None:
     from django.contrib.auth import get_user_model
 
     User = get_user_model()
-    user, created = User.objects.get_or_create(
-        email=email,
-        defaults={
-            "is_staff": True,
-            "is_superuser": True,
-            "is_active": True,
-            "status": "active",
-        },
-    )
+    username = _get_target_username(email)
+    user = User.objects.filter(username=username).first()
+    if user is None:
+        user = User.objects.filter(email=email).first()
+
+    created = user is None
+    if created:
+        user = User.objects.create_superuser(
+            email=email,
+            password=password,
+            username=username,
+        )
+
+    user.email = email
+    user.username = username
     user.is_staff = True
     user.is_superuser = True
     user.is_active = True
     user.status = "active"
     user.set_password(password)
-    user.save(update_fields=["is_staff", "is_superuser", "is_active", "status", "password"])
+    user.save(
+        update_fields=[
+            "email",
+            "username",
+            "is_staff",
+            "is_superuser",
+            "is_active",
+            "status",
+            "password",
+        ]
+    )
     action = "已建立" if created else "已更新"
-    print(f"超級使用者{action}：{email}")
+    print(f"超級使用者{action}：{email}（username: {username}）")
 
 
 def _reset_dev_postgres_schema() -> None:
